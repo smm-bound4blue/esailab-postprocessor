@@ -14,7 +14,10 @@ tab_rose, tab_3d = st.tabs(["Wind Rose", "3D Detail"])
 
 with tab_rose:
     st.caption("TWA=0 at top, increasing clockwise (vessel-relative angle, not compass direction).")
-    st.plotly_chart(build_wind_rose_figure(), width="stretch")
+    speed_bin_width = st.select_slider(
+        "Speed bin width", options=[1, 2, 3, 5, 10, 15], value=5, format_func=lambda w: f"{w} kts"
+    )
+    st.plotly_chart(build_wind_rose_figure(speed_bin_width=speed_bin_width), width="stretch")
 
 with tab_3d:
     st.caption("Full 5°×1kt resolution, ungrouped.")

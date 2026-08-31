@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from app.reference.data import load_wind_probability_matrix
-from app.reference.plotting import _group_speed_bins, build_wind_rose_figure, make_3d_bars
+from app.reference.plotting import _group_speed_bins, _speed_bin_edges, build_wind_rose_figure, make_3d_bars
 
 
 def test_load_wind_probability_matrix_sums_to_one():
@@ -50,7 +50,28 @@ def test_group_speed_bins_assigns_each_column_to_exactly_one_band():
     assert grouped["5–10 kts"].iloc[0] == pytest.approx(1.0)
 
 
-def test_build_wind_rose_figure_preserves_total_probability():
-    fig = build_wind_rose_figure()
+def test_speed_bin_edges_last_bin_absorbs_remainder():
+    edges = _speed_bin_edges(0, 31, width=5)
+    assert edges == [0, 5, 10, 15, 20, 25, 31]
+
+
+def test_speed_bin_edges_exact_division_has_no_remainder_bin():
+    edges = _speed_bin_edges(0, 30, width=5)
+    assert edges == [0, 5, 10, 15, 20, 25, 30]
+
+
+def test_speed_bin_edges_rejects_width_wider_than_range():
+    with pytest.raises(ValueError):
+        _speed_bin_edges(0, 31, width=40)
+
+
+def test_speed_bin_edges_rejects_nonpositive_width():
+    with pytest.raises(ValueError):
+        _speed_bin_edges(0, 31, width=0)
+
+
+@pytest.mark.parametrize("speed_bin_width", [1, 2, 5, 10, 15])
+def test_build_wind_rose_figure_preserves_total_probability(speed_bin_width):
+    fig = build_wind_rose_figure(speed_bin_width=speed_bin_width)
     total_pct = sum(trace.r.sum() for trace in fig.data)
     assert total_pct == pytest.approx(100.0, abs=1e-3)

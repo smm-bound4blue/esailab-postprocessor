@@ -117,10 +117,28 @@ def build_wind_probability_figure() -> go.Figure:
     return fig
 
 
+def _speed_bin_edges(min_speed: float, max_speed: float, width: float) -> list:
+    """
+    [min_speed, min_speed+width, ..., max_speed] -- full-width bins up to the
+    last one, which absorbs whatever remainder is smaller than `width` (so a
+    31kt range grouped in 5kt steps gives bins ...,20-25,25-31, not a
+    trailing 30-31 sliver). Raises if width <= 0 or doesn't fit at least once.
+    """
+    if width <= 0:
+        raise ValueError(f"width must be positive, got {width}")
+    n_full_bins = int((max_speed - min_speed) // width)
+    if n_full_bins < 1:
+        raise ValueError(f"width {width} is wider than the data range [{min_speed}, {max_speed}]")
+    edges = [min_speed + i * width for i in range(n_full_bins + 1)]
+    if edges[-1] < max_speed:
+        edges[-1] = max_speed
+    return edges
+
+
 def _group_speed_bins(matrix: pd.DataFrame, edges: Sequence[float]) -> pd.DataFrame:
     """Aggregate the matrix's 1kt-wide TWS columns into wider [edges[i], edges[i+1])
     speed bands, summing probability within each band -- 31 individual 1kt traces would
-    make the wind rose's stacked legend unreadable, so group into ~6 bands instead."""
+    make the wind rose's stacked legend unreadable, so group into wider bands instead."""
     tws = matrix.columns.to_numpy(dtype=float)
     labels = [f"{edges[i]:g}–{edges[i + 1]:g} kts" for i in range(len(edges) - 1)]
     grouped = pd.DataFrame(index=matrix.index, dtype=float)
@@ -131,19 +149,28 @@ def _group_speed_bins(matrix: pd.DataFrame, edges: Sequence[float]) -> pd.DataFr
 
 
 @st.cache_data
-def build_wind_rose_figure(speed_edges: Sequence[float] = (0, 5, 10, 15, 20, 25, 31)) -> go.Figure:
+def build_wind_rose_figure(speed_bin_width: float = 5.0) -> go.Figure:
     """
     Classic wind rose: one angular sector per TWA bin (5deg wide), stacked
     radially by TWS speed band, radius = probability (%). Reads at a glance
     which TWA/TWS combinations dominate -- the pattern the 3D bar chart also
     shows, but harder to eyeball there since it requires rotating the view.
 
+    speed_bin_width (kts) controls how many TWS bands the legend/stack has --
+    the underlying matrix is always 1kt resolution (see load_wind_probability_matrix),
+    grouped into wider bands here purely for a legible legend. Bin edges are derived
+    from the matrix's own TWS range, not hardcoded, so any width divides it cleanly.
+
     TWA=0 is plotted at the top with angle increasing clockwise, matching the
     conventional bow-up layout for a vessel-relative wind angle (as opposed
     to a compass-referenced true wind direction, which TWA is not).
     """
     matrix = load_wind_probability_matrix()
-    grouped = _group_speed_bins(matrix, speed_edges) * 100  # fraction -> percent
+    tws = matrix.columns.to_numpy(dtype=float)
+    half_width = (tws[1] - tws[0]) / 2  # e.g. 0.5 for 1kt-wide source columns
+    edges = _speed_bin_edges(tws.min() - half_width, tws.max() + half_width, speed_bin_width)
+
+    grouped = _group_speed_bins(matrix, edges) * 100  # fraction -> percent
     twa = matrix.index.to_numpy(dtype=float)
 
     n_bands = len(grouped.columns)
