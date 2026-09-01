@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 KNOTS_TO_MS = 0.514444
 
+# his.csv "Force Coefficient" / "Moment Coefficient" columns dimensionalized
+# back to Newtons/N*m by add_derived_columns (F = CF * q * S, M = CM * q * S
+# * chord -- q = dynamic pressure, S = span*chord reference area, chord the
+# reference length for all three moment axes, confirmed with the user).
+_FORCE_COEF_COLS = ["CL", "CD", "CFX_SAIL", "CFX_SYS", "CFY_SAIL", "CFY_SYS", "CFZ_SAIL", "CFZ_SYS"]
+_MOMENT_COEF_COLS = [
+    "CMX_PILLAR_1.7D_GND", "CMX_PILLAR_1.7D_TRANS", "CMX_PILLAR_BASE", "CMX_PILLAR_HALF", "CMX_SAIL_BASE",
+    "CMY_PILLAR_1.7D_GND", "CMY_PILLAR_1.7D_TRANS", "CMY_PILLAR_BASE", "CMY_PILLAR_HALF", "CMY_SAIL_BASE",
+    "CMZ_PILLAR_1.7D_GND", "CMZ_PILLAR_1.7D_TRANS", "CMZ_PILLAR_BASE", "CMZ_PILLAR_HALF", "CMZ_SAIL_BASE",
+]
+
 
 def convergence_stats(aoa_data: pd.DataFrame, n_avg: int) -> pd.Series:
     """Mean of the last n_avg rows of one AoA's his.csv data, all numeric columns."""
@@ -119,6 +130,13 @@ def add_derived_columns(
       - Fan Volumetric Flow, CQ = flow / (AWS_m/s * span * chord); NaN if chord is None
       - Fan Static/Total Efficiency, Fan Power (kW), Cpow -- only if fan_curve is not None
         and chord is not None (need the reference area)
+      - {col}_N for every _FORCE_COEF_COLS entry (Newtons) and {col}_Nm for every
+        _MOMENT_COEF_COLS entry (N*m) -- F = CF * q * S, M = CM * q * S * chord;
+        NaN whenever chord is None (same reference-area guard as CQ/Cpow)
+      - Z_CP = mean(ZCP_NATIVE_XZ, ZCP_NATIVE_YZ) -- both his.csv columns are the
+        same physical quantity (the center of pressure's Z coordinate/height),
+        just computed from two different load projections (XZ-plane, YZ-plane),
+        so they're averaged into one value rather than kept as two near-duplicates
     """
     if polar_df.empty:
         return polar_df
@@ -126,6 +144,11 @@ def add_derived_columns(
     df = polar_df.copy()
 
     df["E"] = np.where(df["CD"] != 0, df["CL"] / df["CD"], 0.0) if {"CL", "CD"} <= set(df.columns) else np.nan
+
+    if {"ZCP_NATIVE_XZ", "ZCP_NATIVE_YZ"} <= set(df.columns):
+        df["Z_CP"] = df[["ZCP_NATIVE_XZ", "ZCP_NATIVE_YZ"]].mean(axis=1)
+    else:
+        df["Z_CP"] = np.nan
 
     ftp = _get_fan_total_pressure(df)
     df["Fan Total Pressure"] = ftp if ftp is not None else np.nan
@@ -137,6 +160,14 @@ def add_derived_columns(
 
     ref_area = span * chord if chord is not None else None
     V = df["AWS"] * KNOTS_TO_MS
+
+    q = 0.5 * rho * V**2
+    for col in _FORCE_COEF_COLS:
+        df[f"{col}_N"] = (df[col] * q * ref_area) if (ref_area is not None and col in df.columns) else np.nan
+    for col in _MOMENT_COEF_COLS:
+        df[f"{col}_Nm"] = (
+            (df[col] * q * ref_area * chord) if (ref_area is not None and col in df.columns) else np.nan
+        )
 
     if "Fan 1 Volumetric Flow" in df.columns:
         df["Fan Volumetric Flow"] = df["Fan 1 Volumetric Flow"].abs()

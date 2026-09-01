@@ -9,6 +9,7 @@ import pytest
 from src.sail.extract import AoaFolder, CaseFolder
 from src.sail.fan import FanCurve
 from src.sail.transform import (
+    KNOTS_TO_MS,
     add_derived_columns,
     annotate_is_stall,
     build_polar_dataframe,
@@ -113,6 +114,62 @@ def test_add_derived_columns_computes_fan_efficiency_with_curve_and_chord():
     assert result["Fan Power"].iloc[0] > 0
     assert result["Cpow"].iloc[0] > 0
     assert result["Fan Total Efficiency"].iloc[0] > 0
+
+
+def test_add_derived_columns_dimensionalizes_force_and_moment_coefficients():
+    polar_df = pd.DataFrame(
+        {
+            "CL": [2.0], "CD": [0.5], "AWS": [20.0], "RPM": [500.0],
+            "CFX_SAIL": [0.3], "CMX_PILLAR_BASE": [1.5],
+        }
+    )
+    span, chord, rho = 12.0, 2.714, 1.2
+    result = add_derived_columns(polar_df, fan_curve=None, span=span, chord=chord, rho=rho, fan_duct_diameter=1.25)
+
+    V = 20.0 * KNOTS_TO_MS
+    q = 0.5 * rho * V**2
+    S = span * chord
+
+    assert result["CL_N"].iloc[0] == pytest.approx(2.0 * q * S)
+    assert result["CD_N"].iloc[0] == pytest.approx(0.5 * q * S)
+    assert result["CFX_SAIL_N"].iloc[0] == pytest.approx(0.3 * q * S)
+    assert result["CMX_PILLAR_BASE_Nm"].iloc[0] == pytest.approx(1.5 * q * S * chord)
+
+
+def test_add_derived_columns_dimensionalized_columns_nan_when_chord_missing():
+    polar_df = pd.DataFrame(
+        {"CL": [2.0], "CD": [0.5], "AWS": [20.0], "RPM": [500.0], "CFX_SAIL": [0.3], "CMX_PILLAR_BASE": [1.5]}
+    )
+    result = add_derived_columns(polar_df, fan_curve=None, span=12.0, chord=None, rho=1.2, fan_duct_diameter=1.25)
+    assert pd.isna(result["CL_N"].iloc[0])
+    assert pd.isna(result["CFX_SAIL_N"].iloc[0])
+    assert pd.isna(result["CMX_PILLAR_BASE_Nm"].iloc[0])
+
+
+def test_add_derived_columns_dimensionalized_column_nan_when_coefficient_absent():
+    # A moment/force coefficient column entirely absent from the source his.csv
+    # (e.g. an older data batch) shouldn't raise -- its dimensionalized column is NaN.
+    polar_df = pd.DataFrame({"CL": [2.0], "CD": [0.5], "AWS": [20.0], "RPM": [500.0]})
+    result = add_derived_columns(polar_df, fan_curve=None, span=12.0, chord=2.714, rho=1.2, fan_duct_diameter=1.25)
+    assert pd.isna(result["CFX_SAIL_N"].iloc[0])
+    assert pd.isna(result["CMX_PILLAR_BASE_Nm"].iloc[0])
+
+
+def test_add_derived_columns_z_cp_averages_the_two_projections():
+    polar_df = pd.DataFrame(
+        {
+            "CL": [2.0], "CD": [0.5], "AWS": [20.0], "RPM": [500.0],
+            "ZCP_NATIVE_XZ": [14.2], "ZCP_NATIVE_YZ": [14.0],
+        }
+    )
+    result = add_derived_columns(polar_df, fan_curve=None, span=12.0, chord=2.714, rho=1.2, fan_duct_diameter=1.25)
+    assert result["Z_CP"].iloc[0] == pytest.approx(14.1)
+
+
+def test_add_derived_columns_z_cp_nan_when_source_columns_absent():
+    polar_df = pd.DataFrame({"CL": [2.0], "CD": [0.5], "AWS": [20.0], "RPM": [500.0]})
+    result = add_derived_columns(polar_df, fan_curve=None, span=12.0, chord=2.714, rho=1.2, fan_duct_diameter=1.25)
+    assert pd.isna(result["Z_CP"].iloc[0])
 
 
 def test_compute_is_stall_flags_post_clmax_points():
