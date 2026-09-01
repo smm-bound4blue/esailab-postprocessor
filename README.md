@@ -3,8 +3,9 @@
 A minimal Streamlit tool for post-processing CFD simulation results from **eSAILab**, bound4blue's R&D
 project centered on a real 12-meter-span sail built as a test bench on the Barcelona harbor (sensors,
 instrumentation, and validation, alongside CFD). It's an ETL pipeline plus a thin viewer: raw STAR-CCM+
-exports go in, a SQLite database of processed results comes out, and the Streamlit app only ever reads
-from that database.
+exports go in, a SQLite database of processed results comes out, and the Streamlit app reads polar/
+performance results from that database only — with one deliberate exception (per-AoA spatial tables,
+read live from disk; see CLAUDE.md).
 
 ## Simulation types
 
@@ -43,8 +44,9 @@ esailab-postprocessor/
 │       ├── transform.py           # convergence stats, derived columns, is_stall
 │       ├── schema.py               # sail_cases / sail_results tables
 │       ├── db.py                    # sail-specific upserts
+│       ├── spatial_tables.py         # live disk reads of per-AoA tables/ (not ETL'd, see CLAUDE.md)
 │       └── pipeline.py                # orchestration + CLI entry point
-├── app/                     # Streamlit app — reads ONLY from db/cfd_results.db
+├── app/                     # Streamlit app — reads from db/cfd_results.db (+ live tables/, see above)
 │   ├── main.py               # entry point: st.navigation sidebar sections
 │   ├── components/            # shared across all simulation types
 │   ├── sail/                   # Sail pages + query/plotting helpers

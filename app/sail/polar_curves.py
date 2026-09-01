@@ -1,24 +1,33 @@
-"""Polar curves: CL/CD/E vs AoA, grouped by RPM. Reads app.sail.data.get_polar_data()."""
+"""Polar curves: any result variable vs any other, one trace per (Project, AWS, RPM)
+case, with optional legend grouping, std error bars, and stall-point highlighting."""
 
 import streamlit as st
 
-from app.components.data import list_projects
-from app.sail.data import SIMULATION_TYPE, get_polar_data
-from app.sail.plotting import plot_polar_curve
+from app.sail.plotting import PLOTTABLE_COLUMNS, axis_label, plot_polar_curve
+from app.sail.widgets import render_plot_controls, select_projects_and_load
 
 st.title("Polar Curves")
 
-projects_df = list_projects(simulation_type=SIMULATION_TYPE)
-if projects_df.empty:
-    st.info("No sail projects synced yet — run the ETL on the Home page.")
-    st.stop()
+polar_df = select_projects_and_load(key="polar_curves_projects")
+plot_mode, legend_group_by = render_plot_controls(key="polar_curves")
 
-project_row = st.selectbox("Project", projects_df.itertuples(), format_func=lambda r: r.name)
-polar_df = get_polar_data(project_row.id)
+col_y, col_x = st.columns(2)
+y_variable = col_y.selectbox("Y variable", PLOTTABLE_COLUMNS, index=PLOTTABLE_COLUMNS.index("cl"), format_func=axis_label)
+x_variable = col_x.selectbox("X variable", PLOTTABLE_COLUMNS, index=PLOTTABLE_COLUMNS.index("aoa"), format_func=axis_label)
 
-if polar_df.empty:
-    st.warning("No polar data found for this project.")
-    st.stop()
+std_available = f"{y_variable}_std" in polar_df.columns
+col_err, col_stall = st.columns(2)
+show_error_bars = col_err.checkbox(
+    "Show error bars (std)", value=False, disabled=not std_available,
+    help=None if std_available else "No std column for this variable (only CL/CD have one).",
+)
+highlight_stall = col_stall.checkbox("Highlight stall points", value=True)
 
-y_variable = st.selectbox("Variable", ["cl", "cd", "e"], format_func=str.upper)
-st.plotly_chart(plot_polar_curve(polar_df, y=y_variable), width="stretch")
+st.plotly_chart(
+    plot_polar_curve(
+        polar_df, y=y_variable, x=x_variable,
+        legend_group_by=legend_group_by, plot_mode=plot_mode,
+        show_error_bars=show_error_bars, highlight_stall=highlight_stall,
+    ),
+    width="stretch",
+)

@@ -16,6 +16,15 @@ intentionally drops that generality since eSAILab is one evolving physical sail,
 that type's Home page). This keeps "load from transformed results only" true regardless of who's
 driving the pipeline.
 
+**Deliberate exception: per-AoA spatial tables (`app/sail/tables.py`).** The `tables/` subfolder under
+each AoA folder (point-cloud probes, wind profiles, spanwise force distribution — see "Data Directory
+Structure") is read live from disk via `src.sail.spatial_tables`, keyed off `sail_results.source_path`
+(the AoA folder path, already stored per synced row — no schema change needed to locate it). These are
+bulky raw exports, not the curated polar/performance grain the ETL persists — same reasoning
+`esail-postprocessor`'s `AOASimulation.load_table()` uses for its own Spatial Tables page. `src/sail/spatial_tables.py`
+is intentionally separate from `src/sail/extract.py`: it's disk I/O the *app* calls directly for display,
+never touched by `pipeline.run_etl()`.
+
 ## Simulation types
 
 eSAILab runs three kinds of CFD simulation against the real sail/harbor test bench:
@@ -70,12 +79,34 @@ data/<simulation_type>/<project_name>/         # e.g. data/sail/2026-08-21_SMM_T
         └── his.csv                            # authored naming hint only, NOT used to compute is_stall)
 ```
 
+Per-AoA `tables/` is browsable live (not ETL'd) via `app/sail/tables.py` / `src.sail.spatial_tables` — see
+"Deliberate exception" above. Table *names* vary between data batches (`Accumulated Force Table.csv` vs
+`accumulated_force_table.csv`; a later batch added `esail_skin_sections_table` and extra `Mean of Cp`/
+`Mean of Velocity: Magnitude` columns on some internal-probe tables, confirmed 2026-09-01) — so
+`app/sail/tables_plotting.py` classifies by column *shape*, not by table name, into three families, each
+with a domain-specific plot (not a generic scatter — these are meaningful engineering views, worked out
+directly with the user rather than guessed):
+
+- **`is_profile_height_table()`** (has `Position (m)`, currently just Accumulated Force Table) —
+  `plot_height_profile()`: Position on the **vertical** axis, a chosen force variable horizontal.
+- **`is_z_profile_table()`** (has `Z (m)`, the shape fallback — `esail_internal_*`, `esail_winglet_anemometer`,
+  `wind_profile_*`, `Velocity and Pressure Probe Table`) — `plot_z_profile()`: Z on the **vertical** axis, a
+  chosen scalar horizontal. Any subset of these tables can be overlaid on one chart (multiselect on the
+  page), since they share this shape; a table missing the selected variable is silently skipped rather
+  than erroring.
+- **`is_skin_sections_table()`** (has `Pressure Coefficient` + X/Y/Z, currently just
+  `esail_skin_sections_table`) — two selectable modes, one trace per Z (height) station either way:
+  `plot_cp_vs_xc()` (Cp vs `x/c`, Y-axis inverted by default — suction up, the aerodynamic convention) and
+  `plot_skin_sections_xy()` (the XY airfoil cross-section shape, colored by Cp with one shared color range/
+  colorbar across stations). `x/c = (X - X_min at that Z) / chord` (`compute_x_over_chord()`,
+  `config/config.yaml`'s `esail.chord`) — confirmed with the user that X/Y are in the sail's body-local
+  frame, so X is the chordwise axis at every AoA, not just AoA=0.
+
 Other per-case subfolders (`logs/`, `macro/`, `scripts/`, `input/porosity.csv`, per-AoA `plot_img/`,
-`plot_csv/`, `tables/`) exist in the raw data but are **out of scope for v1** — this tool only extracts
-`his.csv` (per type) and `fan_curve.csv`. Revisit if/when spatial tables or STAR-CCM+ image browsing get
-added. `data/` also had ~2300 WSL/NTFS `:Zone.Identifier` artifact files (cleaned 2026-08-31) — if they
-reappear after a new data drop, `find data -name '*:Zone.Identifier' -delete` is safe (pure OS junk, not
-simulation output).
+`plot_csv/`) remain **out of scope** — this tool's ETL only extracts `his.csv` (per type) and
+`fan_curve.csv`; revisit if/when STAR-CCM+ image browsing is needed too. `data/` also had ~2300 WSL/NTFS
+`:Zone.Identifier` artifact files (cleaned 2026-08-31) — if they reappear after a new data drop, `find
+data -name '*:Zone.Identifier' -delete` is safe (pure OS junk, not simulation output).
 
 `his.csv` column names use STAR-CCM+'s `"<name>: <report type> (<units>)"` format (e.g. `"CL: Force
 Coefficient"`, `"Fan 1 Total Pressure Rise: Pressure Drop (Pa)"`) — `src.sail.extract.load_his_csv`

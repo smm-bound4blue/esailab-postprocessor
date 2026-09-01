@@ -10,8 +10,7 @@ import logging
 
 import streamlit as st
 
-from app.components.data import list_projects
-from app.sail.data import SIMULATION_TYPE, run_etl_for_project
+from app.sail.data import SIMULATION_TYPE, get_project_summary, run_etl_for_project
 from src.config import get_project_path_for_type
 
 logger = logging.getLogger(__name__)
@@ -51,8 +50,15 @@ else:
                 st.error(f"ETL failed: {e}")
 
 st.subheader("Sail projects in database")
-projects_df = list_projects(simulation_type=SIMULATION_TYPE)
-if projects_df.empty:
+summary_df = get_project_summary()
+if summary_df.empty:
     st.info("No projects synced yet — run the ETL above.")
 else:
-    st.dataframe(projects_df, width="stretch")
+    display_df = summary_df.assign(
+        rpm_range=lambda d: d["rpm_min"].map("{:g}".format) + " – " + d["rpm_max"].map("{:g}".format),
+        aws_range=lambda d: d["aws_min"].map("{:g}".format) + " – " + d["aws_max"].map("{:g}".format),
+    )[["name", "case_count", "aoa_count", "rpm_range", "aws_range", "span", "chord", "last_synced"]]
+    display_df.columns = [
+        "Project", "Cases", "AoA rows", "RPM range", "AWS range (kts)", "Span (m)", "Chord (m)", "Last synced",
+    ]
+    st.dataframe(display_df, width="stretch", hide_index=True)

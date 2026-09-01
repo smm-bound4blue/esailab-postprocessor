@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from src.sail.extract import CaseFolder
-from src.sail.fan import FanCurve, interpolate_power
+from src.sail.fan import FanCurve, dynamic_pressure, interpolate_power
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +94,13 @@ def _get_fan_total_pressure(df: pd.DataFrame) -> Optional[pd.Series]:
     return None
 
 
-def _get_fan_dynamic_pressure(df: pd.DataFrame, rho: float, fan_duct_area: float) -> Optional[pd.Series]:
-    """Pv2 (Pa) — real monitor if present, else estimated from volumetric flow + duct area."""
+def _get_fan_dynamic_pressure(df: pd.DataFrame, rho: float, fan_duct_diameter: float) -> Optional[pd.Series]:
+    """Pv2 (Pa) — real monitor if present, else estimated from volumetric flow + duct diameter
+    (src.sail.fan.dynamic_pressure, shared with the manufacturer curve's derived Total Pressure)."""
     if "Fan 1 Dynamic Pressure (MFA)" in df.columns:
         return df["Fan 1 Dynamic Pressure (MFA)"].abs()
     if "Fan 1 Volumetric Flow" in df.columns:
-        velocity = df["Fan 1 Volumetric Flow"].abs() / fan_duct_area
-        return 0.5 * rho * velocity**2
+        return dynamic_pressure(df["Fan 1 Volumetric Flow"], rho, fan_duct_diameter)
     return None
 
 
@@ -127,11 +127,10 @@ def add_derived_columns(
 
     df["E"] = np.where(df["CD"] != 0, df["CL"] / df["CD"], 0.0) if {"CL", "CD"} <= set(df.columns) else np.nan
 
-    fan_duct_area = np.pi * (fan_duct_diameter / 2) ** 2
     ftp = _get_fan_total_pressure(df)
     df["Fan Total Pressure"] = ftp if ftp is not None else np.nan
     if ftp is not None:
-        pv2 = _get_fan_dynamic_pressure(df, rho, fan_duct_area)
+        pv2 = _get_fan_dynamic_pressure(df, rho, fan_duct_diameter)
         df["Fan Static Pressure"] = (ftp - pv2) if pv2 is not None else ftp
     else:
         df["Fan Static Pressure"] = np.nan

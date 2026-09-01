@@ -110,6 +110,9 @@ def build_wind_probability_figure() -> go.Figure:
             xaxis_title="True Wind Angle (deg)",
             yaxis_title="True Wind Speed (kts)",
             zaxis_title="Probability (%)",
+            # Orthographic, not perspective (the plotly default) -- bar heights need to
+            # compare accurately regardless of distance from the camera.
+            camera=dict(projection=dict(type="orthographic")),
         ),
         height=650,
         margin=dict(l=0, r=0, t=40, b=0),
@@ -199,5 +202,79 @@ def build_wind_rose_figure(speed_bin_width: float = 5.0) -> go.Figure:
         legend_title="TWS",
         height=650,
         margin=dict(l=0, r=0, t=60, b=0),
+    )
+    return fig
+
+
+#: The wind probability matrix's TWS values are measured at this height (m) --
+#: standard meteorological reference height.
+REFERENCE_HEIGHT_M = 10.0
+
+# alpha (Hellmann exponent) presets for the power-law wind profile
+# V(z) = V(z_ref) * (z / z_ref)^alpha. Values in common use for extrapolating
+# a 10m reference measurement to another height.
+TERRAIN_EXPONENTS = {
+    "Open water (α=1/9)": 1 / 9,
+    "Land (α=1/7)": 1 / 7,
+}
+
+
+def power_law_scale_factor(height_m: float, alpha: float, reference_height_m: float = REFERENCE_HEIGHT_M) -> float:
+    """
+    (z / z_ref)^alpha from V(z) = V(z_ref) * (z / z_ref)^alpha. This factor
+    is the same for every wind speed (it doesn't depend on V(z_ref) itself),
+    so applying it to a whole speed distribution is just a constant rescale
+    of the speed axis -- the probabilities themselves don't change.
+    """
+    return (height_m / reference_height_m) ** alpha
+
+
+@st.cache_data
+def build_wind_speed_probability_figure(height_m: float = REFERENCE_HEIGHT_M, alpha: float = 1 / 7) -> go.Figure:
+    """
+    Marginal TWS probability (summed over every TWA) as a PDF + CDF on a
+    shared x-axis, dual y-axes -- the classic "wind speed probability"
+    chart for reading off both the most likely speed and the cumulative
+    fraction of time below any given speed.
+
+    height_m/alpha extrapolate the 10m-reference TWS values to another
+    height via the power-law wind profile (power_law_scale_factor) -- e.g.
+    height_m=20 for the sail's top winglet anemometers. Probabilities are
+    unchanged; only the TWS axis is rescaled (see power_law_scale_factor).
+    """
+    matrix = load_wind_probability_matrix()
+    scale = power_law_scale_factor(height_m, alpha)
+    tws_centers = matrix.columns.to_numpy(dtype=float) * scale
+    pdf_pct = matrix.to_numpy().sum(axis=0) * 100  # sum over TWA rows, fraction -> percent
+    cdf_pct = np.cumsum(pdf_pct)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=tws_centers, y=pdf_pct, mode="lines+markers", name="Probability",
+            hovertemplate="TWS: %{x:.2f} kts<br>Probability: %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=tws_centers, y=cdf_pct, mode="lines+markers", name="Cumulative Probability",
+            yaxis="y2",
+            hovertemplate="TWS: %{x:.2f} kts<br>Cumulative: %{y:.1f}%<extra></extra>",
+        )
+    )
+
+    height_note = (
+        f"at {REFERENCE_HEIGHT_M:g}m (reference)"
+        if height_m == REFERENCE_HEIGHT_M
+        else f"at {height_m:g}m (extrapolated from {REFERENCE_HEIGHT_M:g}m, α={alpha:.3f})"
+    )
+    fig.update_layout(
+        title=f"Barcelona Harbor — Wind Speed Probability (True Wind, {height_note})",
+        xaxis_title="True Wind Speed (kts)",
+        yaxis=dict(title="Probability (%)", rangemode="tozero"),
+        yaxis2=dict(title="Cumulative Probability (%)", overlaying="y", side="right", range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=550,
+        margin=dict(l=0, r=0, t=100, b=0),
     )
     return fig
