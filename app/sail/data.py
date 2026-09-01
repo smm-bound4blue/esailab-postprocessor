@@ -14,6 +14,7 @@ import streamlit as st
 from app.components.data import clear_project_caches
 from src.config import get_default_db_path
 from src.sail import db as sail_db
+from src.sail.flow_estimation import DEFAULT_P1_HEIGHT_M, DEFAULT_XI, estimate_flow_rates
 from src.sail.pipeline import ETLResult, run_etl
 
 SIMULATION_TYPE = "sail"
@@ -80,6 +81,29 @@ def get_project_summary(db_path: Optional[Path] = None) -> pd.DataFrame:
         )
     finally:
         conn.close()
+
+
+@st.cache_data(ttl=3600)
+def get_flow_rate_estimates(
+    polar_df: pd.DataFrame,
+    chord: float,
+    duct_diameter: float,
+    rho: float,
+    xi: float = DEFAULT_XI,
+    target_height: float = DEFAULT_P1_HEIGHT_M,
+) -> pd.DataFrame:
+    """
+    polar_df enriched with p1_pa/p2_pa/estimated_flow_rate for every row,
+    via src.sail.flow_estimation (reads each AoA's spatial tables live
+    from disk -- see CLAUDE.md's "Deliberate exception"). Cached on
+    (polar_df, xi, target_height, ...) since it's file I/O per row, not
+    just a DB query -- cheap to re-plot, not cheap to re-extract.
+    """
+    if polar_df.empty:
+        return polar_df
+    return estimate_flow_rates(
+        polar_df, chord=chord, duct_diameter=duct_diameter, rho=rho, xi=xi, target_height=target_height
+    )
 
 
 def run_etl_for_project(project_path: Path) -> ETLResult:

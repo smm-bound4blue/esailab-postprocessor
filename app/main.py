@@ -26,6 +26,7 @@ st.set_page_config(page_title="eSAILab CFD Post-Processor", layout="wide")
 sail_home = st.Page("sail/home.py", title="Home", default=True)
 sail_polar_curves = st.Page("sail/polar_curves.py", title="Polar Curves")
 sail_performance = st.Page("sail/performance.py", title="Performance")
+sail_fan_performance = st.Page("sail/fan_performance.py", title="Fan Performance")
 sail_tables = st.Page("sail/tables.py", title="Tables")
 sail_export = st.Page("sail/export.py", title="Export")
 
@@ -33,7 +34,7 @@ reference_wind_climate = st.Page("reference/wind_climate.py", title="Wind Climat
 
 pg = st.navigation(
     {
-        "Sail": [sail_home, sail_polar_curves, sail_performance, sail_tables, sail_export],
+        "Sail": [sail_home, sail_polar_curves, sail_performance, sail_fan_performance, sail_tables, sail_export],
         "Reference": [reference_wind_climate],
     }
 )

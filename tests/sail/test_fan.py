@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.sail.fan import FanCurve, build_reference_curve, dynamic_pressure
+from src.sail.fan import FanCurve, build_reference_curve, duct_area, dynamic_pressure
 
 
 def _sample_curve():
@@ -14,6 +14,10 @@ def _sample_curve():
         pressure=pd.Series([1000.0, 700.0, 300.0]),  # static, per user confirmation
         power=pd.Series([15.0, 17.0, 16.0]),
     )
+
+
+def test_duct_area_hand_calc():
+    assert duct_area(1.25) == pytest.approx(np.pi * (1.25 / 2) ** 2)
 
 
 def test_dynamic_pressure_hand_calc():

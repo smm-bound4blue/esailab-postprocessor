@@ -10,7 +10,7 @@ project_name and is_stall).
 """
 
 from numbers import Number
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 import plotly.colors as pc
@@ -156,36 +156,60 @@ def plot_polar_curve(
 
 def plot_fan_performance_curve(
     sim_df: pd.DataFrame,
-    reference_curve: pd.DataFrame,
-    rpm: float,
+    reference_curves: Dict[float, pd.DataFrame],
     show_total: bool = True,
 ) -> go.Figure:
     """
-    The manufacturer's fan performance curve (reference_curve, from
-    src.sail.fan.build_reference_curve -- flowrate/static_pressure/total_pressure
-    already scaled to `rpm`) as reference lines, with the simulated Fan Static/Total
-    Pressure at that RPM overlaid as markers -- one trace per (project, aws), since
-    different AoA rows at a fixed RPM land at different flow rates (the sail's
-    aerodynamic blockage is the fan's "system resistance"), tracing out where the
-    CFD-derived operating points actually fall against the reference curve.
+    The manufacturer's fan performance curve -- one per selected RPM
+    (reference_curves: rpm -> DataFrame from src.sail.fan.build_reference_curve,
+    already affinity-scaled to that RPM) -- as reference lines, with the
+    simulated Fan Static/Total Pressure overlaid as markers, one trace per
+    (project, aws, rpm). Different AoA rows at a fixed RPM land at different
+    flow rates (the sail's aerodynamic blockage is the fan's "system
+    resistance"), tracing out where the CFD-derived operating points
+    actually fall against each RPM's reference curve.
+
+    Reference curves use a grey scale (darker = higher RPM), kept visually
+    separate from the qualitative palette used for simulated (project, aws,
+    rpm) traces, so the two "families" of lines don't blend together once
+    multiple RPMs are shown at once. Both families still share one legend
+    group per RPM (legendgroup="RPM={rpm}"), so toggling a group in the
+    legend hides/shows that RPM's reference curve together with every
+    simulated trace at that RPM, regardless of color.
     """
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Scatter(
-            x=reference_curve["flowrate"], y=reference_curve["static_pressure"],
-            mode="lines", name=f"Reference Fan Static Pressure ({rpm:g} RPM)", line=dict(color="black", width=3),
-        )
+    rpms_sorted = sorted(reference_curves.keys())
+    n_rpms = len(rpms_sorted)
+    grey_shades = (
+        pc.sample_colorscale("Greys", [0.4 + 0.6 * (i / (n_rpms - 1)) for i in range(n_rpms)])
+        if n_rpms > 1
+        else ["black"]
     )
-    if show_total:
+    ref_color_map = dict(zip(rpms_sorted, grey_shades))
+
+    for rpm in rpms_sorted:
+        curve = reference_curves[rpm]
+        color = ref_color_map[rpm]
+        legend_group = f"RPM={rpm:g}"
         fig.add_trace(
             go.Scatter(
-                x=reference_curve["flowrate"], y=reference_curve["total_pressure"],
-                mode="lines", name=f"Reference Fan Total Pressure ({rpm:g} RPM)", line=dict(color="black", width=3, dash="dash"),
+                x=curve["flowrate"], y=curve["static_pressure"],
+                mode="lines", name=f"Reference Fan Static Pressure ({rpm:g} RPM)", line=dict(color=color, width=3),
+                legendgroup=legend_group, legendgrouptitle_text=legend_group,
             )
         )
+        if show_total:
+            fig.add_trace(
+                go.Scatter(
+                    x=curve["flowrate"], y=curve["total_pressure"],
+                    mode="lines", name=f"Reference Fan Total Pressure ({rpm:g} RPM)",
+                    line=dict(color=color, width=3, dash="dash"),
+                    legendgroup=legend_group, legendgrouptitle_text=legend_group,
+                )
+            )
 
-    group_cols = ["project_name", "aws"]
+    group_cols = ["project_name", "aws", "rpm"]
     color_keys = sorted(sim_df[group_cols].drop_duplicates().itertuples(index=False, name=None))
     palette = pc.qualitative.Plotly
     color_map = {key: palette[i % len(palette)] for i, key in enumerate(color_keys)}
@@ -193,9 +217,11 @@ def plot_fan_performance_curve(
     for group_values, group in sim_df.groupby(group_cols, sort=True):
         if not isinstance(group_values, tuple):
             group_values = (group_values,)
+        row = dict(zip(group_cols, group_values))
         group = group.sort_values("aoa")
-        label = _trace_name(dict(zip(group_cols, group_values)), group_cols)
+        label = _trace_name(row, group_cols)
         color = color_map[group_values]
+        legend_group = f"RPM={_format_group_value(row['rpm'])}"
 
         fig.add_trace(
             go.Scatter(
@@ -204,6 +230,7 @@ def plot_fan_performance_curve(
                 marker=dict(symbol="circle", color=color, size=12),
                 customdata=group["aoa"],
                 hovertemplate="Q=%{x:.2f} m³/s<br>FSP=%{y:.1f} Pa<br>AoA=%{customdata:.1f}°<extra></extra>",
+                legendgroup=legend_group, legendgrouptitle_text=legend_group,
             )
         )
         if show_total:
@@ -214,12 +241,68 @@ def plot_fan_performance_curve(
                     marker=dict(symbol="diamond", color=color, size=12),
                     customdata=group["aoa"],
                     hovertemplate="Q=%{x:.2f} m³/s<br>FTP=%{y:.1f} Pa<br>AoA=%{customdata:.1f}°<extra></extra>",
+                    legendgroup=legend_group, legendgrouptitle_text=legend_group,
                 )
             )
 
     fig.update_layout(
         xaxis=dict(title="Volumetric Flow Rate (m³/s)", showgrid=True),
         yaxis=dict(title="Pressure (Pa)", showgrid=True),
+        legend=dict(groupclick="togglegroup"),
+        template="plotly_dark", height=600, margin=dict(l=0, r=0, t=30, b=0),
+    )
+    return fig
+
+
+def plot_flow_rate_parity(df: pd.DataFrame) -> go.Figure:
+    """
+    Estimated (from two static-pressure probes, src.sail.flow_estimation)
+    vs Simulated Fan Volumetric Flow, one trace per (project, aws, rpm),
+    with a y=x reference line -- how well the two-probe estimate tracks
+    the actual CFD flow rate across the AoA sweep. Rows where the estimate
+    couldn't be computed (missing tables, non-physical inputs) are dropped.
+    """
+    df = df.dropna(subset=["estimated_flow_rate", "fan_volumetric_flow"])
+
+    fig = go.Figure()
+    if df.empty:
+        return fig
+
+    group_cols = ["project_name", "aws", "rpm"]
+    color_keys = sorted(df[group_cols].drop_duplicates().itertuples(index=False, name=None))
+    palette = pc.qualitative.Plotly
+    color_map = {key: palette[i % len(palette)] for i, key in enumerate(color_keys)}
+
+    for group_values, group in df.groupby(group_cols, sort=True):
+        if not isinstance(group_values, tuple):
+            group_values = (group_values,)
+        row = dict(zip(group_cols, group_values))
+        label = _trace_name(row, group_cols)
+        color = color_map[group_values]
+        fig.add_trace(
+            go.Scatter(
+                x=group["fan_volumetric_flow"], y=group["estimated_flow_rate"],
+                mode="markers", name=label, marker=dict(color=color, size=10),
+                customdata=group["aoa"],
+                hovertemplate=(
+                    "Simulated Q=%{x:.2f} m³/s<br>Estimated Q=%{y:.2f} m³/s<br>"
+                    "AoA=%{customdata:.1f}°<extra></extra>"
+                ),
+            )
+        )
+
+    lo = min(df["fan_volumetric_flow"].min(), df["estimated_flow_rate"].min())
+    hi = max(df["fan_volumetric_flow"].max(), df["estimated_flow_rate"].max())
+    fig.add_trace(
+        go.Scatter(
+            x=[lo, hi], y=[lo, hi], mode="lines", name="y = x",
+            line=dict(color="black", dash="dash", width=2),
+        )
+    )
+
+    fig.update_layout(
+        xaxis=dict(title="Simulated Fan Volumetric Flow (m³/s)", showgrid=True),
+        yaxis=dict(title="Estimated Fan Volumetric Flow (m³/s)", showgrid=True),
         template="plotly_dark", height=600, margin=dict(l=0, r=0, t=30, b=0),
     )
     return fig

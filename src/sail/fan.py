@@ -68,13 +68,19 @@ def interpolate_power(curve: FanCurve, rpm: float, flowrate_m3s: float) -> float
     return float(np.interp(flowrate_m3s, scaled["flowrate"], scaled["power"]))
 
 
+def duct_area(duct_diameter: float) -> float:
+    """Circular duct cross-section area (A2) from its diameter. Shared by
+    dynamic_pressure() here and by src.sail.flow_estimation's Bernoulli
+    flow-rate estimate, which also needs A2."""
+    return np.pi * (duct_diameter / 2) ** 2
+
+
 def dynamic_pressure(volumetric_flow, rho: float, duct_diameter: float):
     """Pv2 = 0.5 * rho * velocity^2, velocity = |Q| / duct_area. Shared by both the
     CFD-derived dynamic pressure estimate (src.sail.transform, when no direct monitor is
     present) and the manufacturer fan curve's derived Total Pressure (build_reference_curve)
     -- same physics, one formula. `volumetric_flow` can be a scalar, Series, or ndarray."""
-    duct_area = np.pi * (duct_diameter / 2) ** 2
-    velocity = np.abs(volumetric_flow) / duct_area
+    velocity = np.abs(volumetric_flow) / duct_area(duct_diameter)
     return 0.5 * rho * velocity**2
 
 
