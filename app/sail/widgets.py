@@ -23,10 +23,10 @@ _LEGEND_GROUPINGS = {
 
 def select_projects_and_load(key: str) -> pd.DataFrame:
     """
-    Renders a project multiselect (stops the script if nothing is
-    selectable/selected/loaded) and returns the combined polar_df for the
-    selected project(s). Trace/legend grouping is a separate, page-level
-    concern -- see render_plot_controls().
+    Renders a project multiselect plus AWS/RPM case filters (stops the
+    script if nothing is selectable/selected/loaded) and returns the
+    combined, filtered polar_df for the selected project(s). Trace/legend
+    grouping is a separate, page-level concern -- see render_plot_controls().
     """
     projects_df = list_projects(simulation_type=SIMULATION_TYPE)
     if projects_df.empty:
@@ -43,6 +43,24 @@ def select_projects_and_load(key: str) -> pd.DataFrame:
     polar_df = get_polar_data(project_ids)
     if polar_df.empty:
         st.warning("No polar data found for the selected project(s).")
+        st.stop()
+
+    aws_options = sorted(polar_df["aws"].unique())
+    rpm_options = sorted(polar_df["rpm"].unique())
+    col_aws, col_rpm = st.columns(2)
+    selected_aws = col_aws.multiselect(
+        "AWS (kts)", aws_options, default=aws_options, format_func=lambda v: f"{v:g}", key=f"{key}_aws"
+    )
+    selected_rpm = col_rpm.multiselect(
+        "RPM", rpm_options, default=rpm_options, format_func=lambda v: f"{v:g}", key=f"{key}_rpm"
+    )
+    if not selected_aws or not selected_rpm:
+        st.info("Select at least one AWS and one RPM.")
+        st.stop()
+
+    polar_df = polar_df[polar_df["aws"].isin(selected_aws) & polar_df["rpm"].isin(selected_rpm)]
+    if polar_df.empty:
+        st.warning("No cases match the selected AWS/RPM filters.")
         st.stop()
 
     return polar_df
