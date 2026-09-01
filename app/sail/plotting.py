@@ -79,6 +79,7 @@ def plot_polar_curve(
     plot_mode: str = "Lines + Markers",
     show_error_bars: bool = False,
     highlight_stall: bool = False,
+    sort_by: Optional[str] = None,
 ) -> go.Figure:
     """
     y vs x, one trace per distinct trace_by combination (default: one per
@@ -88,6 +89,19 @@ def plot_polar_curve(
     individually. show_error_bars adds a {y}_std error bar when that column
     exists (only cl/cd have one). highlight_stall overlays every is_stall
     row, across all traces, as a single red "Stall" marker trace.
+
+    sort_by controls the point order within each trace before drawing lines
+    -- defaults to `x` (connect points in increasing X order). Pass
+    sort_by="aoa" to always connect points in AoA-sweep order regardless of
+    which variable is plotted on X (matters whenever X isn't monotonic with
+    AoA -- e.g. CQ or Fan Volumetric Flow can dip before rising again over
+    an AoA sweep, which would otherwise draw a line doubling back on itself).
+
+    Hover always shows the plotted X/Y values plus CQ, AoA, and RPM (whichever
+    of those aren't already on an axis), so a point's operating condition is
+    readable without switching axis selections -- this matters most on the
+    Performance page, where one trace spans multiple RPMs and RPM never gets
+    its own axis.
     """
     trace_cols = trace_by or CASE_COLS
     legend_group_by = legend_group_by or []
@@ -106,7 +120,7 @@ def plot_polar_curve(
         if not isinstance(trace_values, tuple):
             trace_values = (trace_values,)
         row = dict(zip(trace_cols, trace_values))
-        subset = subset.sort_values(x)
+        subset = subset.sort_values(sort_by or x)
 
         color_key = tuple(row[c] for c in color_cols)
         legend_group = _trace_name(row, legend_group_by) if legend_group_by else None
@@ -117,6 +131,10 @@ def plot_polar_curve(
             dash_index_by_group[legend_group] = dash_idx + 1
             dash = _DASH_CYCLE[dash_idx % len(_DASH_CYCLE)]
 
+        extra_fields = [c for c in ("cq", "aoa", "rpm") if c not in (x, y) and c in subset.columns]
+        hover_lines = [f"{axis_label(x)}=%{{x:.4g}}", f"{axis_label(y)}=%{{y:.4g}}"]
+        hover_lines += [f"{axis_label(c)}=%{{customdata[{i}]:.4g}}" for i, c in enumerate(extra_fields)]
+
         trace_kwargs = dict(
             x=subset[x],
             y=subset[y],
@@ -124,7 +142,10 @@ def plot_polar_curve(
             name=_trace_name(row, trace_cols),
             line=dict(color=color_map[color_key], dash=dash),
             marker=dict(size=marker_size),
+            hovertemplate="<br>".join(hover_lines) + "<extra></extra>",
         )
+        if extra_fields:
+            trace_kwargs["customdata"] = subset[extra_fields].to_numpy()
         if legend_group is not None:
             trace_kwargs["legendgroup"] = legend_group
             trace_kwargs["legendgrouptitle_text"] = legend_group

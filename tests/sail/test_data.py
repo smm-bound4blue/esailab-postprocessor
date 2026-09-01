@@ -59,6 +59,42 @@ def test_get_polar_data_multiple_projects_combines_rows(two_projects_db):
     assert len(df) == 4
 
 
+def _make_project_with_shared_rpm(tmp_path, name):
+    """One project with two AWS conditions (5, 20) both at RPM=500, each with
+    3 AoA points -- the exact scenario an ORDER BY missing `aws` breaks."""
+    project = tmp_path / name
+    for aws, cl_base in [(5.0, 1.0), (20.0, 2.0)]:
+        case = project / f"AWS_{aws:02.0f}kts_RPM_0500"
+        _write_aoa(case / "AoA_00.0", aoa=0.0, cl=cl_base, cd=0.2)
+        _write_aoa(case / "AoA_05.0", aoa=5.0, cl=cl_base + 0.5, cd=0.3)
+        _write_aoa(case / "AoA_10.0", aoa=10.0, cl=cl_base + 1.0, cd=0.4)
+    return project
+
+
+@pytest.fixture
+def shared_rpm_db(tmp_path):
+    db_path = tmp_path / "shared_rpm.db"
+    project = _make_project_with_shared_rpm(tmp_path / "data", "proj_shared")
+    run_etl(project, db_path=db_path, n_avg=3)
+    return db_path
+
+
+def test_get_polar_data_groups_by_aws_before_rpm_when_rpm_is_shared(shared_rpm_db):
+    summary = get_project_summary(db_path=shared_rpm_db)
+    project_id = int(summary["id"].iloc[0])
+
+    df = get_polar_data((project_id,), db_path=shared_rpm_db)
+    assert len(df) == 6  # 2 aws x 3 aoa
+
+    for (_aws, _rpm), group in df.groupby(["aws", "rpm"], sort=False):
+        # AoA ascending within the trace
+        assert list(group["aoa"]) == sorted(group["aoa"])
+        # a contiguous run of rows -- not interleaved with the other AWS
+        # trace that shares the same RPM
+        start = group.index[0]
+        assert list(group.index) == list(range(start, start + len(group)))
+
+
 def test_get_project_summary_counts_and_ranges(two_projects_db):
     summary = get_project_summary(db_path=two_projects_db)
     assert set(summary["name"]) == {"proj_a", "proj_b"}

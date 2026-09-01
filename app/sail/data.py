@@ -27,6 +27,12 @@ def get_polar_data(project_ids: Tuple[int, ...], db_path: Optional[Path] = None)
     projects -- the combined polar/performance DataFrame the Sail pages
     plot directly. Always includes a project_name column (even for a
     single project) so callers don't need to special-case the count.
+
+    Ordered by (project, aws, rpm, aoa) -- aws must come before rpm here,
+    not after: RPM alone doesn't identify a trace (two AWS conditions can
+    share the same RPM, as this project's data does), so without aws first
+    rows from different AWS traces at the same RPM would interleave by AoA
+    instead of each trace's AoA points staying in a contiguous, sorted run.
     """
     if not project_ids:
         return pd.DataFrame()
@@ -41,7 +47,7 @@ def get_polar_data(project_ids: Tuple[int, ...], db_path: Optional[Path] = None)
             JOIN sail_cases c ON r.case_id = c.id
             JOIN projects p ON c.project_id = p.id
             WHERE c.project_id IN ({placeholders})
-            ORDER BY p.name, c.rpm, r.aoa
+            ORDER BY p.name, c.aws, c.rpm, r.aoa
             """,
             conn,
             params=project_ids,

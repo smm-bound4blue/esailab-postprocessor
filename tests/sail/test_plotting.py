@@ -41,6 +41,27 @@ def test_plot_polar_curve_never_mixes_two_aws_into_one_trace():
         assert len(set(trace.x)) == len(trace.x)
 
 
+def test_plot_polar_curve_default_sorts_by_x():
+    # cq is deliberately non-monotonic with aoa: aoa=[0,10,20] -> cq=[5,2,8]
+    df = pd.DataFrame(
+        {"project_name": ["P1"] * 3, "aws": [20.0] * 3, "rpm": [500.0] * 3, "aoa": [0.0, 10.0, 20.0], "cq": [5.0, 2.0, 8.0]}
+    )
+    fig = plot_polar_curve(df, y="cq", x="cq")
+    # default: sorted by the plotted x (cq itself, ascending) -> aoa order becomes 10, 0, 20
+    assert list(fig.data[0].x) == [2.0, 5.0, 8.0]
+
+
+def test_plot_polar_curve_sort_by_aoa_ignores_x_variable():
+    # same non-monotonic data as above, but x is plotted as "cq" while sort_by="aoa"
+    # forces point order to follow the AoA sweep instead of the (non-monotonic) x values
+    df = pd.DataFrame(
+        {"project_name": ["P1"] * 3, "aws": [20.0] * 3, "rpm": [500.0] * 3, "aoa": [0.0, 10.0, 20.0], "cq": [5.0, 2.0, 8.0]}
+    )
+    fig = plot_polar_curve(df, y="cq", x="cq", sort_by="aoa")
+    # x values now appear in AoA order (0->5, 10->2, 20->8), not sorted ascending
+    assert list(fig.data[0].x) == [5.0, 2.0, 8.0]
+
+
 def test_plot_polar_curve_legend_group_by_project_clusters_correctly():
     fig = plot_polar_curve(_sample_df(), y="cl", x="aoa", legend_group_by=["project_name"])
     groups = {t.legendgroup for t in fig.data}

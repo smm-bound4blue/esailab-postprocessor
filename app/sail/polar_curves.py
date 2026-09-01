@@ -28,6 +28,7 @@ st.plotly_chart(
         polar_df, y=y_variable, x=x_variable,
         legend_group_by=legend_group_by, plot_mode=plot_mode,
         show_error_bars=show_error_bars, highlight_stall=highlight_stall,
+        sort_by="aoa",
     ),
     width="stretch",
 )
