@@ -6,6 +6,8 @@ Its own page (not a Performance tab) since there's room to grow here --
 more fan-specific views can join it later.
 """
 
+from pathlib import Path
+
 import streamlit as st
 
 from app.sail.data import get_flow_rate_estimates
@@ -14,6 +16,10 @@ from app.sail.widgets import select_projects_and_load
 from src.config import load_config
 from src.sail.fan import build_reference_curve, duct_area, load_fan_curve
 from src.sail.flow_estimation import DEFAULT_P1_HEIGHT_M, DEFAULT_XI, ellipse_area
+
+_ASSETS_DIR = Path(__file__).parent / "assets"
+SAIL_CUTAWAY_IMAGE_PATH = _ASSETS_DIR / "sail_cutaway.webp"
+P1_P2_IMAGE_PATH = _ASSETS_DIR / "p1_p2_probe_locations.webp"
 
 st.title("Fan Performance")
 
@@ -130,7 +136,14 @@ with tab_flow_estimation:
                 "esail_internal_center_table exist under tables/ for these cases."
             )
         else:
-            st.plotly_chart(plot_flow_rate_parity(enriched_df), width="stretch")
+            col_chart, col_image = st.columns([2, 1])
+            with col_chart:
+                st.plotly_chart(plot_flow_rate_parity(enriched_df), width="stretch")
+            with col_image:
+                # "stretch" so it always fits the column's actual width rather than a
+                # guessed fixed pixel size that can overflow past the column boundary
+                st.image(str(P1_P2_IMAGE_PATH), caption="P1/P2 probe locations", width="stretch")
+
             st.caption(
                 f"{len(valid_df)} of {len(enriched_df)} AoA points had a valid estimate "
                 f"({len(enriched_df) - len(valid_df)} skipped — missing tables or a non-physical P1/P2 pair)."
@@ -139,11 +152,16 @@ with tab_flow_estimation:
             with st.expander("How is this calculated?"):
                 a1_val = ellipse_area(config.esail.chord)
                 a2_val = duct_area(config.pipeline.fan_duct_diameter)
-                st.markdown(
-                    f"""
-**Physical principle**: Bernoulli with losses between two static-pressure measurements —
-**P1** inside the sail plenum (several diameters upstream of the fan bellmouth) and **P2**
-inside the fan duct (downstream of the bellmouth, upstream of the motor/blades):
+
+                col_text, col_image = st.columns([2, 1])
+                with col_text:
+                    st.markdown(
+                        f"""
+**Setup**: two static-pressure measurements per fan — **P1** several diameters upstream of
+the bellmouth (inside the plenum) and **P2** downstream of the bellmouth, upstream of the
+motor/blades (inside the fan duct) — see the P1/P2 diagram above.
+
+**Physical principle**: Bernoulli with losses between the two locations:
 
 ```
 p1 + ½ρv1² = p2 + ½ρv2² + ξ·½ρv2²
@@ -173,4 +191,10 @@ flow rate exactly at that AoA. Points are dropped (not plotted) when either tabl
 missing for that AoA, or when P1 ≤ P2 / the pressure-versus-loss balance has no physical
 (real-valued) solution.
 """
-                )
+                    )
+                with col_image:
+                    # width chosen from the image's own aspect ratio (244x860) to land at ~500px tall
+                    st.image(
+                        str(SAIL_CUTAWAY_IMAGE_PATH), caption="Sail section — probe locations in context",
+                        width=200,
+                    )
