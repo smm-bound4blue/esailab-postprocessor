@@ -144,3 +144,127 @@ def interpolate_performance_envelope(
         return pd.DataFrame(), warnings
 
     return pd.concat(result_rows, ignore_index=True), warnings
+
+
+def smooth_performance_envelope(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    x_col: str = "aoa",
+    step: float = 1.0,
+    bin_width: float = 10.0,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    For each group_cols group: bin x_col into fixed-width bins (bin_width),
+    averaging every numeric column within each populated bin into one
+    representative point, then PCHIP-interpolate through those bin points
+    onto a uniform x_col grid at `step` spacing, clipped to the bin points'
+    own [min, max] (PCHIP never extrapolates past its control points). The
+    first/last bin's x-position is pinned back to the group's true min/max
+    x_col regardless of bin_width -- otherwise a wide bin_width would pull
+    those edge bins' mean x inward (their y stays the bin average either
+    way), shrinking the fitted curve's range away from the real data's.
+
+    Unlike interpolate_performance_envelope's plain per-point PCHIP, this
+    averages first -- that matters when group_cols is coarser than one
+    physical trace (e.g. ["project_name"], pooling every AWS/RPM trace
+    together): different AWS conditions can have overlapping/duplicate
+    x_col values with conflicting y values, and averaging within each bin
+    collapses that scatter into one clean point *before* fitting, instead
+    of needing PCHIP's exact-x-value duplicate_shift trick.
+
+    Tried two other approaches first, both real numeric failures on this
+    project's actual pooled multi-AWS data, not just theoretical concerns:
+    scipy.interpolate.UnivariateSpline's automatic knot placement was
+    fragile on a Cpow column spanning ~0.03 to ~40 (three orders of
+    magnitude) with a duplicate AoA across two AWS traces -- silently
+    all-NaN, or wildly oscillating negative. A hand-rolled Gaussian-kernel
+    local-linear regression (LOESS) fixed that, but a local *line* has no
+    bound on its own: in a real gap between data points wider than its
+    bandwidth, adjacent to a region where the trend was steepening, it
+    would extrapolate into a dip/bump below or above every point that went
+    into it. Binning sidesteps both: there's no knot-placement step to
+    destabilize, and PCHIP through bin averages is shape-preserving
+    between its control points, so it can't invent a new local extremum
+    the binned data doesn't already show.
+
+    bin_width (same units as x_col, e.g. degrees for AoA): the width of
+    each averaging bin. Larger = fewer, coarser bins (more scatter
+    absorbed, less faithful to individual points); smaller = finer bins
+    closer to interpolate_performance_envelope's per-point behavior.
+
+    Returns (fitted DataFrame, warnings for any skipped group -- fewer
+    than 2 populated bins, or no step-grid point inside the bin range).
+    """
+    warnings: List[str] = []
+
+    if df.empty or x_col not in df.columns:
+        return pd.DataFrame(), warnings
+
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    y_cols = [c for c in numeric_cols if c != x_col and c not in group_cols]
+
+    result_rows = []
+
+    for group_key, group_df in df.groupby(group_cols, dropna=False):
+        group_label = group_key if isinstance(group_key, tuple) else (group_key,)
+        label_str = ", ".join(f"{c}={v}" for c, v in zip(group_cols, group_label))
+
+        group_df = group_df.sort_values(x_col)
+        x_arr = group_df[x_col].to_numpy(dtype=float)
+
+        if len(x_arr) < 2:
+            warnings.append(f"Skipped trace ({label_str}): fewer than 2 {x_col} points")
+            continue
+
+        x_min = x_arr.min()
+        bin_idx = np.floor((x_arr - x_min) / bin_width).astype(int)
+        binned = group_df[[x_col] + y_cols].groupby(bin_idx).mean().sort_values(x_col)
+        bx = binned[x_col].to_numpy(dtype=float, copy=True)
+
+        if len(bx) < 2:
+            warnings.append(
+                f"Skipped trace ({label_str}): fewer than 2 populated bins at bin_width={bin_width:g}"
+            )
+            continue
+
+        # Pin the first/last bin's x-position back to the trace's true endpoint
+        # AoA -- their y stays the bin average, but a wide bin_width otherwise
+        # pulls the *edge* bins' mean x inward from the real min/max (e.g. two
+        # points 5 degrees apart both landing in one 10-degree bin averages
+        # their x too), which would shrink the fitted curve's AoA range away
+        # from the real one. Always safe/still strictly increasing since these
+        # can only move bx[0] down and bx[-1] up, i.e. further from their
+        # already-innermost neighbors, never past them.
+        bx[0], bx[-1] = x_arr.min(), x_arr.max()
+
+        tol = 1e-9
+        x_min_grid = np.ceil(bx.min() / step - tol) * step
+        x_max_grid = np.floor(bx.max() / step + tol) * step
+
+        if x_min_grid > x_max_grid:
+            warnings.append(
+                f"Skipped trace ({label_str}): no {x_col} step={step:g} grid "
+                f"point falls within [{bx.min():g}, {bx.max():g}]"
+            )
+            continue
+
+        n_points = round((x_max_grid - x_min_grid) / step) + 1
+        x_new = np.round(np.linspace(x_min_grid, x_max_grid, n_points), 9)
+
+        group_result = {x_col: x_new}
+        for col, val in zip(group_cols, group_label):
+            group_result[col] = val
+
+        for y_col in y_cols:
+            by = binned[y_col].to_numpy(dtype=float)
+            if np.isnan(by).any():
+                group_result[y_col] = np.full_like(x_new, np.nan)
+            else:
+                group_result[y_col] = PchipInterpolator(bx, by)(x_new)
+
+        result_rows.append(pd.DataFrame(group_result))
+
+    if not result_rows:
+        return pd.DataFrame(), warnings
+
+    return pd.concat(result_rows, ignore_index=True), warnings

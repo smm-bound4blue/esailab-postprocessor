@@ -193,6 +193,56 @@ skips all rows (unchanged `his_csv_mtime`), confirming the upsert/staleness logi
 `streamlit.testing.v1.AppTest` — no exceptions, and each page's dataframe/chart elements actually
 populate (not just an empty shell).
 
+## Performance page: Combined AWS Envelope
+
+The Sail "Performance" page (`app/sail/performance.py`) has three tabs: **Performance Envelope**
+(one CLmax-per-RPM point per (Project, AWS) trace), **Interpolated Data** (that same per-trace data
+PCHIP-resampled onto a uniform AoA grid, `src.sail.interpolation.interpolate_performance_envelope`),
+and **Combined AWS Envelope** — every AWS/RPM trace within a project pooled into *one* curve, for
+when AWS traces overlap in AoA/Cpow and a single combined performance curve is needed instead of one
+per AWS.
+
+`compute_clmax_data`'s optional `full_polar_traces` (`app/sail/analysis.py`) lets the user pick which
+specific (Project, AWS) traces get the "full polar at min RPM" treatment (replace that trace's CLmax
+point at its minimum RPM with every AoA point up to CLmax there) rather than an all-or-nothing toggle.
+`enforce_cl_monotonic` drops any point whose CL doesn't beat the running max at a lower AoA — pass
+`group_cols=["project_name"]` (coarser than its default per-trace grouping) to resolve conflicts
+*across* pooled AWS traces too, not just within one.
+
+**Combined AWS Envelope's fitting method (`src.sail.interpolation.smooth_performance_envelope`) went
+through two failed approaches before landing on bin-average + PCHIP** — real numeric failures against
+this project's actual pooled multi-AWS data, not just theoretical concerns, so don't re-attempt either
+without re-reading this:
+1. `scipy.interpolate.UnivariateSpline` (cubic smoothing spline): its automatic knot placement was
+   numerically fragile on a Cpow column spanning ~0.03 to ~40 (three orders of magnitude) with a
+   duplicate AoA across two AWS traces — silently returned all-NaN, or a wildly oscillating fit dipping
+   negative, no exception raised either way.
+2. A hand-rolled Gaussian-kernel local-linear regression (LOESS): fixed the numerical fragility, but a
+   local *line* has no bound of its own — in a real ~22°-wide gap between AoA data points (wider than
+   its bandwidth) adjacent to a region where the trend was steepening, it would extrapolate into a dip
+   well below every point that went into it. Clamping the local-linear result to its window's [min, max]
+   fixed that specific case, but a wider bandwidth just widens the window (and the clamp bound) enough
+   to pull in points from multiple genuinely different regimes at once, so the wobble came back at a
+   different scale — a narrow fix, not a general one.
+
+The current approach bins AoA into fixed-width bins (`bin_width`, default 10°), averages every
+variable within each populated bin (collapsing AWS-to-AWS scatter and overlapping/duplicate AoA values
+*before* fitting), then PCHIP-interpolates through those bin averages. No knot-placement step to
+destabilize, and PCHIP is shape-preserving between control points, so it can't invent a new local
+extremum the binned data doesn't already show. The first/last bin's x-position is pinned back to the
+group's true min/max AoA regardless of `bin_width` (only its y stays the bin average) — otherwise a
+wide bin_width shrinks the fitted curve's endpoints inward from the real data (confirmed on real data:
+two AoA points 5° apart both landing in one 10°-wide edge bin pulled the start from 20° to 22.5° before
+this fix).
+
+**Known remaining limitation, not fixable by the fitting method:** pooling multiple AWS conditions that
+happen to share the same minimum RPM (e.g. "full polar at min RPM" applied to several traces at once)
+can put genuinely different Cpow "shelves" (Cpow is driven mainly by RPM, not AoA alone) over the same
+AoA range — no 1D curve fit can resolve that into one physically meaningful value, since Cpow really is
+multi-valued at a given AoA once RPM varies independently. When that shows up, either apply "full polar
+at min RPM" to fewer traces at once (the `full_polar_traces` multiselect), or use the per-AWS
+**Interpolated Data** tab instead, which doesn't pool across AWS.
+
 ## Commands
 
 ```bash
