@@ -229,7 +229,7 @@ def build_wind_rose_figure(speed_bin_width: float = 5.0, twa_range: Optional[Tup
         ),
         legend_title="TWS",
         height=650,
-        margin=dict(l=0, r=0, t=60, b=0),
+        margin=dict(l=0, r=0, t=60, b=20),
     )
     return fig
 
