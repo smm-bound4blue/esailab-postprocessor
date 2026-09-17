@@ -15,6 +15,7 @@ from app.reference.plotting import (
     build_wind_speed_probability_figure,
     make_3d_bars,
     power_law_scale_factor,
+    twa_range_coverage_pct,
 )
 
 
@@ -122,6 +123,43 @@ def test_power_law_scale_factor_at_reference_height_is_one():
 def test_power_law_scale_factor_at_20m_matches_hand_calc():
     # V(20) = V(10) * (20/10)^(1/7)
     assert power_law_scale_factor(20.0, alpha=1 / 7) == pytest.approx(2.0 ** (1 / 7))
+
+
+def test_twa_range_coverage_pct_full_range_is_100():
+    assert twa_range_coverage_pct(None) == pytest.approx(100.0)
+
+
+def test_twa_range_coverage_pct_matches_manual_filter_sum():
+    matrix = load_wind_probability_matrix()
+    twa = matrix.index.to_numpy(dtype=float)
+    expected = matrix.loc[(twa >= 30) & (twa <= 60)].to_numpy().sum() * 100
+    assert twa_range_coverage_pct((30, 60)) == pytest.approx(expected)
+
+
+def test_twa_range_coverage_pct_narrower_range_is_smaller():
+    assert twa_range_coverage_pct((30, 60)) < twa_range_coverage_pct((0, 180))
+
+
+def test_build_wind_rose_figure_twa_range_drops_outside_sectors():
+    fig = build_wind_rose_figure(twa_range=(30, 60))
+    for trace in fig.data:
+        theta = _trace_values(trace.theta)
+        assert theta.min() >= 30 and theta.max() <= 60
+
+
+def test_build_wind_rose_figure_twa_range_total_matches_coverage():
+    twa_range = (30, 60)
+    fig = build_wind_rose_figure(twa_range=twa_range)
+    total_pct = sum(_trace_values(trace.r).sum() for trace in fig.data)
+    assert total_pct == pytest.approx(twa_range_coverage_pct(twa_range), abs=1e-3)
+
+
+def test_build_wind_speed_probability_figure_twa_range_caps_below_full_total():
+    twa_range = (30, 60)
+    fig = build_wind_speed_probability_figure(twa_range=twa_range)
+    cdf = _trace_values(fig.data[1].y)
+    assert cdf[-1] == pytest.approx(twa_range_coverage_pct(twa_range), abs=1e-3)
+    assert cdf[-1] < 100.0  # not renormalized -- a real slice of a smaller total
 
 
 def test_build_wind_speed_probability_figure_scales_x_axis_only():

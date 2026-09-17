@@ -9,6 +9,7 @@ from app.reference.plotting import (
     build_wind_probability_figure,
     build_wind_rose_figure,
     build_wind_speed_probability_figure,
+    twa_range_coverage_pct,
 )
 
 st.title("Wind Climate")
@@ -22,9 +23,17 @@ tab_rose, tab_speed, tab_3d = st.tabs(["Wind Rose", "Wind Speed Probability", "3
 with tab_rose:
     st.caption("TWA=0 at top, increasing clockwise (vessel-relative angle, not compass direction).")
     speed_bin_width = st.select_slider(
-        "Speed bin width", options=[1, 2, 3, 5, 10, 15], value=5, format_func=lambda w: f"{w} kts"
+        "Speed bin width", options=[1, 2, 3, 5, 10, 15], value=2, format_func=lambda w: f"{w} kts"
     )
-    st.plotly_chart(build_wind_rose_figure(speed_bin_width=speed_bin_width), width="stretch")
+    twa_range_rose = st.slider(
+        "TWA range", min_value=-180, max_value=180, value=(-180, 180), step=5, format="%d°",
+        key="rose_twa_range",
+        help="Restrict to a TWA slice -- sectors outside it just disappear from the rose.",
+    )
+    st.plotly_chart(
+        build_wind_rose_figure(speed_bin_width=speed_bin_width, twa_range=twa_range_rose), width="stretch"
+    )
+    st.caption(f"Selected TWA range covers {twa_range_coverage_pct(twa_range_rose):.1f}% of total wind time.")
 
 with tab_speed:
     st.caption(
@@ -44,7 +53,18 @@ with tab_speed:
         alpha = TERRAIN_EXPONENTS[terrain]
         col_alpha.metric("α (exponent)", f"{alpha:.3f}")
 
-    st.plotly_chart(build_wind_speed_probability_figure(height_m=height_m, alpha=alpha), width="stretch")
+    twa_range_speed = st.slider(
+        "TWA range", min_value=-180, max_value=180, value=(-180, 180), step=5, format="%d°",
+        key="speed_twa_range",
+        help="Restrict the PDF/CDF to a TWA slice -- probabilities are NOT renormalized, so a "
+        "narrower range means a smaller PDF and a CDF that caps out below 100%.",
+    )
+
+    st.plotly_chart(
+        build_wind_speed_probability_figure(height_m=height_m, alpha=alpha, twa_range=twa_range_speed),
+        width="stretch",
+    )
+    st.caption(f"Selected TWA range covers {twa_range_coverage_pct(twa_range_speed):.1f}% of total wind time.")
 
 with tab_3d:
     st.caption("Full 5°×1kt resolution, ungrouped.")

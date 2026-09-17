@@ -6,7 +6,7 @@ histogram -- one Mesh3d trace built from stacked box geometry rather than
 one trace per bar, so it stays fast even for a 72x31-bar grid.
 """
 
-from typing import Sequence
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -151,8 +151,31 @@ def _group_speed_bins(matrix: pd.DataFrame, edges: Sequence[float]) -> pd.DataFr
     return grouped
 
 
+def _filter_by_twa_range(matrix: pd.DataFrame, twa_range: Optional[Tuple[float, float]]) -> pd.DataFrame:
+    """Restricts the matrix to TWA (index) bins within [lo, hi] inclusive. None means
+    no filtering -- every bin kept, matching this function's use as an optional param
+    default across build_wind_rose_figure/build_wind_speed_probability_figure."""
+    if twa_range is None:
+        return matrix
+    lo, hi = twa_range
+    twa = matrix.index.to_numpy(dtype=float)
+    return matrix.loc[(twa >= lo) & (twa <= hi)]
+
+
+def twa_range_coverage_pct(twa_range: Optional[Tuple[float, float]]) -> float:
+    """% of total wind probability mass falling within twa_range (inclusive of both
+    ends) -- None (no filter) is always 100%. Restricting to a TWA range necessarily
+    drops some probability mass, so a filtered Wind Speed Probability CDF caps out
+    below 100% -- this is what the app shows alongside it so that isn't mistaken for
+    a bug."""
+    if twa_range is None:
+        return 100.0
+    matrix = load_wind_probability_matrix()
+    return float(_filter_by_twa_range(matrix, twa_range).to_numpy().sum() * 100)
+
+
 @st.cache_data
-def build_wind_rose_figure(speed_bin_width: float = 5.0) -> go.Figure:
+def build_wind_rose_figure(speed_bin_width: float = 5.0, twa_range: Optional[Tuple[float, float]] = None) -> go.Figure:
     """
     Classic wind rose: one angular sector per TWA bin (5deg wide), stacked
     radially by TWS speed band, radius = probability (%). Reads at a glance
@@ -164,11 +187,15 @@ def build_wind_rose_figure(speed_bin_width: float = 5.0) -> go.Figure:
     grouped into wider bands here purely for a legible legend. Bin edges are derived
     from the matrix's own TWS range, not hardcoded, so any width divides it cleanly.
 
+    twa_range, if given, restricts to that [lo, hi] TWA slice (see
+    _filter_by_twa_range) -- sectors outside it simply don't appear, rather than
+    being drawn as zero-height, so the rose becomes a wedge instead of a full circle.
+
     TWA=0 is plotted at the top with angle increasing clockwise, matching the
     conventional bow-up layout for a vessel-relative wind angle (as opposed
     to a compass-referenced true wind direction, which TWA is not).
     """
-    matrix = load_wind_probability_matrix()
+    matrix = _filter_by_twa_range(load_wind_probability_matrix(), twa_range)
     tws = matrix.columns.to_numpy(dtype=float)
     half_width = (tws[1] - tws[0]) / 2  # e.g. 0.5 for 1kt-wide source columns
     edges = _speed_bin_edges(tws.min() - half_width, tws.max() + half_width, speed_bin_width)
@@ -192,8 +219,9 @@ def build_wind_rose_figure(speed_bin_width: float = 5.0) -> go.Figure:
             )
         )
 
+    twa_note = f", TWA [{twa_range[0]:g}°, {twa_range[1]:g}°]" if twa_range is not None else ""
     fig.update_layout(
-        title="Barcelona Harbor — Wind Rose (True Wind)",
+        title=f"Barcelona Harbor — Wind Rose (True Wind{twa_note})",
         barmode="stack",
         polar=dict(
             angularaxis=dict(rotation=90, direction="clockwise", ticksuffix="°"),
@@ -230,19 +258,29 @@ def power_law_scale_factor(height_m: float, alpha: float, reference_height_m: fl
 
 
 @st.cache_data
-def build_wind_speed_probability_figure(height_m: float = REFERENCE_HEIGHT_M, alpha: float = 1 / 7) -> go.Figure:
+def build_wind_speed_probability_figure(
+    height_m: float = REFERENCE_HEIGHT_M, alpha: float = 1 / 7, twa_range: Optional[Tuple[float, float]] = None
+) -> go.Figure:
     """
-    Marginal TWS probability (summed over every TWA) as a PDF + CDF on a
-    shared x-axis, dual y-axes -- the classic "wind speed probability"
-    chart for reading off both the most likely speed and the cumulative
-    fraction of time below any given speed.
+    Marginal TWS probability (summed over every TWA, or just the TWA rows
+    inside twa_range if given) as a PDF + CDF on a shared x-axis, dual
+    y-axes -- the classic "wind speed probability" chart for reading off
+    both the most likely speed and the cumulative fraction of time below
+    any given speed.
 
     height_m/alpha extrapolate the 10m-reference TWS values to another
     height via the power-law wind profile (power_law_scale_factor) -- e.g.
     height_m=20 for the sail's top winglet anemometers. Probabilities are
     unchanged; only the TWS axis is rescaled (see power_law_scale_factor).
+
+    twa_range restricts the sum to that TWA slice instead of every TWA row
+    -- deliberately *not* renormalized back to 100%, so the CDF caps out at
+    whatever share of total wind time that TWA range actually represents
+    (see twa_range_coverage_pct, which the app shows alongside this chart
+    so the capped-below-100% CDF isn't mistaken for a bug). Consistent with
+    the wind rose and 3D chart, which are also absolute, not conditional.
     """
-    matrix = load_wind_probability_matrix()
+    matrix = _filter_by_twa_range(load_wind_probability_matrix(), twa_range)
     scale = power_law_scale_factor(height_m, alpha)
     tws_centers = matrix.columns.to_numpy(dtype=float) * scale
     pdf_pct = matrix.to_numpy().sum(axis=0) * 100  # sum over TWA rows, fraction -> percent
@@ -268,8 +306,9 @@ def build_wind_speed_probability_figure(height_m: float = REFERENCE_HEIGHT_M, al
         if height_m == REFERENCE_HEIGHT_M
         else f"at {height_m:g}m (extrapolated from {REFERENCE_HEIGHT_M:g}m, α={alpha:.3f})"
     )
+    twa_note = f", TWA [{twa_range[0]:g}°, {twa_range[1]:g}°]" if twa_range is not None else ""
     fig.update_layout(
-        title=f"Barcelona Harbor — Wind Speed Probability (True Wind, {height_note})",
+        title=f"Barcelona Harbor — Wind Speed Probability (True Wind, {height_note}{twa_note})",
         xaxis_title="True Wind Speed (kts)",
         yaxis=dict(title="Probability (%)", rangemode="tozero"),
         yaxis2=dict(title="Cumulative Probability (%)", overlaying="y", side="right", range=[0, 100]),
