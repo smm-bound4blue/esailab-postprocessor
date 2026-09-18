@@ -18,6 +18,24 @@ st.caption(
     "combinations matter most when planning harbour/interference simulations."
 )
 
+
+def _twa_range_input(key_prefix: str, help_text: str):
+    """From/To TWA sliders (not one two-handle slider) -- TWA is circular, wrapping at
+    +-180deg, so From > To is a valid selection meaning "wrap through +-180deg" (e.g.
+    From=170, To=-170 selects the wedge straddling the seam), which a single ordered
+    [lo, hi] slider can't express."""
+    col_from, col_to = st.columns(2)
+    twa_from = col_from.slider(
+        "From", min_value=-180, max_value=180, value=-180, step=5, format="%d°", key=f"{key_prefix}_from",
+        help=help_text,
+    )
+    twa_to = col_to.slider(
+        "To", min_value=-180, max_value=180, value=180, step=5, format="%d°", key=f"{key_prefix}_to",
+        help="If From > To, the range wraps through ±180° instead of being invalid.",
+    )
+    return twa_from, twa_to
+
+
 tab_rose, tab_speed, tab_3d = st.tabs(["Wind Rose", "Wind Speed Probability", "3D Detail"])
 
 with tab_rose:
@@ -25,10 +43,8 @@ with tab_rose:
     speed_bin_width = st.select_slider(
         "Speed bin width", options=[1, 2, 3, 5, 10, 15], value=2, format_func=lambda w: f"{w} kts"
     )
-    twa_range_rose = st.slider(
-        "TWA range", min_value=-180, max_value=180, value=(-180, 180), step=5, format="%d°",
-        key="rose_twa_range",
-        help="Restrict to a TWA slice -- sectors outside it just disappear from the rose.",
+    twa_range_rose = _twa_range_input(
+        "rose_twa_range", help_text="Restrict to a TWA slice -- sectors outside it just disappear from the rose."
     )
     st.plotly_chart(
         build_wind_rose_figure(speed_bin_width=speed_bin_width, twa_range=twa_range_rose), width="stretch"
@@ -53,10 +69,9 @@ with tab_speed:
         alpha = TERRAIN_EXPONENTS[terrain]
         col_alpha.metric("α (exponent)", f"{alpha:.3f}")
 
-    twa_range_speed = st.slider(
-        "TWA range", min_value=-180, max_value=180, value=(-180, 180), step=5, format="%d°",
-        key="speed_twa_range",
-        help="Restrict the PDF/CDF to a TWA slice -- probabilities are NOT renormalized, so a "
+    twa_range_speed = _twa_range_input(
+        "speed_twa_range",
+        help_text="Restrict the PDF/CDF to a TWA slice -- probabilities are NOT renormalized, so a "
         "narrower range means a smaller PDF and a CDF that caps out below 100%.",
     )
 

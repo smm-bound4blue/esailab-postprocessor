@@ -9,8 +9,10 @@ import pytest
 from app.reference.data import load_wind_probability_matrix
 from app.reference.plotting import (
     REFERENCE_HEIGHT_M,
+    _filter_by_twa_range,
     _group_speed_bins,
     _speed_bin_edges,
+    _twa_range_label,
     build_wind_rose_figure,
     build_wind_speed_probability_figure,
     make_3d_bars,
@@ -140,6 +142,30 @@ def test_twa_range_coverage_pct_narrower_range_is_smaller():
     assert twa_range_coverage_pct((30, 60)) < twa_range_coverage_pct((0, 180))
 
 
+def test_filter_by_twa_range_wrap_selects_both_edges_not_the_middle():
+    # From=170 > To=-170 wraps through +-180deg: keep 170<=twa<=180 and -180<=twa<=-170,
+    # drop everything strictly in between (e.g. 0deg)
+    matrix = load_wind_probability_matrix()
+    filtered = _filter_by_twa_range(matrix, (170, -170))
+    twa = filtered.index.to_numpy(dtype=float)
+    assert len(twa) > 0
+    assert ((twa >= 170) | (twa <= -170)).all()
+    assert 0.0 not in twa
+
+
+def test_twa_range_coverage_pct_wrap_matches_manual_or_filter():
+    matrix = load_wind_probability_matrix()
+    twa = matrix.index.to_numpy(dtype=float)
+    expected = matrix.loc[(twa >= 170) | (twa <= -170)].to_numpy().sum() * 100
+    assert twa_range_coverage_pct((170, -170)) == pytest.approx(expected)
+
+
+def test_twa_range_label_notes_wrap_only_when_from_greater_than_to():
+    assert "(wraps" not in _twa_range_label((30, 60))
+    assert "(wraps" in _twa_range_label((170, -170))
+    assert _twa_range_label(None) == ""
+
+
 def test_build_wind_rose_figure_twa_range_drops_outside_sectors():
     fig = build_wind_rose_figure(twa_range=(30, 60))
     for trace in fig.data:
@@ -152,6 +178,18 @@ def test_build_wind_rose_figure_twa_range_total_matches_coverage():
     fig = build_wind_rose_figure(twa_range=twa_range)
     total_pct = sum(_trace_values(trace.r).sum() for trace in fig.data)
     assert total_pct == pytest.approx(twa_range_coverage_pct(twa_range), abs=1e-3)
+
+
+def test_build_wind_rose_figure_wrap_range_keeps_only_edge_sectors():
+    fig = build_wind_rose_figure(twa_range=(170, -170))
+    any_sector_seen = False
+    for trace in fig.data:
+        theta = _trace_values(trace.theta)
+        if len(theta) == 0:
+            continue
+        any_sector_seen = True
+        assert ((theta >= 170) | (theta <= -170)).all()
+    assert any_sector_seen
 
 
 def test_build_wind_speed_probability_figure_twa_range_caps_below_full_total():

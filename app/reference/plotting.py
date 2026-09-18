@@ -152,14 +152,35 @@ def _group_speed_bins(matrix: pd.DataFrame, edges: Sequence[float]) -> pd.DataFr
 
 
 def _filter_by_twa_range(matrix: pd.DataFrame, twa_range: Optional[Tuple[float, float]]) -> pd.DataFrame:
-    """Restricts the matrix to TWA (index) bins within [lo, hi] inclusive. None means
-    no filtering -- every bin kept, matching this function's use as an optional param
-    default across build_wind_rose_figure/build_wind_speed_probability_figure."""
+    """
+    Restricts the matrix to TWA (index) bins within [lo, hi] inclusive. None
+    means no filtering -- every bin kept, matching this function's use as an
+    optional param default across build_wind_rose_figure/
+    build_wind_speed_probability_figure.
+
+    lo > hi means the range wraps through the +-180deg seam -- TWA is a
+    circular quantity (180deg and -180deg are the same direction), so
+    (170, -170) selects the 20deg wedge from 170deg through +-180deg down
+    to -170deg, rather than being an invalid/empty range. Mirrors how a
+    "10pm to 6am" time-of-day range is understood to cross midnight once
+    the start is later than the end.
+    """
     if twa_range is None:
         return matrix
     lo, hi = twa_range
     twa = matrix.index.to_numpy(dtype=float)
-    return matrix.loc[(twa >= lo) & (twa <= hi)]
+    if lo <= hi:
+        return matrix.loc[(twa >= lo) & (twa <= hi)]
+    return matrix.loc[(twa >= lo) | (twa <= hi)]
+
+
+def _twa_range_label(twa_range: Optional[Tuple[float, float]]) -> str:
+    """Chart-title suffix for a twa_range, e.g. ', TWA [170°, -170°] (wraps through ±180°)'."""
+    if twa_range is None:
+        return ""
+    lo, hi = twa_range
+    wrap_note = " (wraps through ±180°)" if lo > hi else ""
+    return f", TWA [{lo:g}°, {hi:g}°]{wrap_note}"
 
 
 def twa_range_coverage_pct(twa_range: Optional[Tuple[float, float]]) -> float:
@@ -219,9 +240,8 @@ def build_wind_rose_figure(speed_bin_width: float = 5.0, twa_range: Optional[Tup
             )
         )
 
-    twa_note = f", TWA [{twa_range[0]:g}°, {twa_range[1]:g}°]" if twa_range is not None else ""
     fig.update_layout(
-        title=f"Barcelona Harbor — Wind Rose (True Wind{twa_note})",
+        title=f"Barcelona Harbor — Wind Rose (True Wind{_twa_range_label(twa_range)})",
         barmode="stack",
         polar=dict(
             angularaxis=dict(rotation=90, direction="clockwise", ticksuffix="°"),
@@ -306,9 +326,8 @@ def build_wind_speed_probability_figure(
         if height_m == REFERENCE_HEIGHT_M
         else f"at {height_m:g}m (extrapolated from {REFERENCE_HEIGHT_M:g}m, α={alpha:.3f})"
     )
-    twa_note = f", TWA [{twa_range[0]:g}°, {twa_range[1]:g}°]" if twa_range is not None else ""
     fig.update_layout(
-        title=f"Barcelona Harbor — Wind Speed Probability (True Wind, {height_note}{twa_note})",
+        title=f"Barcelona Harbor — Wind Speed Probability (True Wind, {height_note}{_twa_range_label(twa_range)})",
         xaxis_title="True Wind Speed (kts)",
         yaxis=dict(title="Probability (%)", rangemode="tozero"),
         yaxis2=dict(title="Cumulative Probability (%)", overlaying="y", side="right", range=[0, 100]),
