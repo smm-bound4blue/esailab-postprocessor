@@ -233,7 +233,7 @@ def test_compute_wind_speed_stats_percentiles_are_nondecreasing():
     row = stats.set_index("Statistic")
     values = [
         float(row.loc[f"TWS at {p}% cumulative probability", "Value"].replace(" kts", ""))
-        for p in (10, 25, 50, 75, 90)
+        for p in (10, 25, 50, 75, 90, 99)
     ]
     assert values == sorted(values)
 
@@ -264,6 +264,51 @@ def test_compute_wind_speed_stats_total_coverage_matches_twa_range_coverage_pct(
     row = stats.set_index("Statistic")
     reported = float(row.loc["Total coverage (cumulative probability)", "Value"].replace(" %", ""))
     assert reported == pytest.approx(twa_range_coverage_pct(twa_range), abs=0.05)
+
+
+def test_compute_wind_speed_stats_normalized_percentiles_always_reached():
+    # even where total coverage is well below 90%, the normalized rows must still
+    # give a real TWS -- that's the whole point of rescaling to the selection's own 100%
+    stats = compute_wind_speed_stats(twa_range=(30, 60))
+    row = stats.set_index("Statistic")
+    for p in (10, 25, 50, 75, 90, 99):
+        value = row.loc[f"TWS at {p}% cumulative probability (normalized to selection)", "Value"]
+        assert "not reached" not in value
+        assert value.endswith(" kts")
+
+
+def test_compute_wind_speed_stats_normalized_percentiles_are_nondecreasing():
+    stats = compute_wind_speed_stats(twa_range=(30, 60))
+    row = stats.set_index("Statistic")
+    values = [
+        float(row.loc[f"TWS at {p}% cumulative probability (normalized to selection)", "Value"].replace(" kts", ""))
+        for p in (10, 25, 50, 75, 90, 99)
+    ]
+    assert values == sorted(values)
+
+
+def test_compute_wind_speed_stats_normalized_matches_absolute_at_full_coverage():
+    # with no twa_range (100% coverage), rescaling to "the selection's own 100%" is a
+    # no-op, so normalized and absolute percentiles must agree exactly
+    stats = compute_wind_speed_stats()
+    row = stats.set_index("Statistic")
+    for p in (10, 25, 50, 75, 90, 99):
+        absolute = row.loc[f"TWS at {p}% cumulative probability", "Value"]
+        normalized = row.loc[f"TWS at {p}% cumulative probability (normalized to selection)", "Value"]
+        assert absolute == normalized
+
+
+def test_compute_wind_speed_stats_normalized_matches_manual_rescale():
+    twa_range = (30, 60)
+    tws, pdf, cdf = wind_speed_pdf_cdf(twa_range=twa_range)
+    total_pct = cdf[-1]
+    normalized_cdf = cdf / total_pct * 100
+    expected_idx = np.searchsorted(normalized_cdf, 50)
+    expected = f"{tws[expected_idx]:.2f} kts"
+
+    stats = compute_wind_speed_stats(twa_range=twa_range)
+    row = stats.set_index("Statistic")
+    assert row.loc["TWS at 50% cumulative probability (normalized to selection)", "Value"] == expected
 
 
 def test_compute_wind_speed_stats_empty_selection_returns_empty_frame():

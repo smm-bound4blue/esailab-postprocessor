@@ -357,7 +357,7 @@ def compute_wind_speed_stats(
     height_m: float = REFERENCE_HEIGHT_M,
     alpha: float = 1 / 7,
     twa_range: Optional[Tuple[float, float]] = None,
-    percentiles: Sequence[float] = (10, 25, 50, 75, 90),
+    percentiles: Sequence[float] = (10, 25, 50, 75, 90, 99),
 ) -> pd.DataFrame:
     """
     Summary statistics for the exact same (TWS, PDF, CDF) distribution
@@ -374,7 +374,14 @@ def compute_wind_speed_stats(
     caps below 100% when twa_range is set -- see
     build_wind_speed_probability_figure's docstring) reports "not reached"
     rather than silently returning the last TWS bin, which would otherwise
-    misleadingly look like a real answer.
+    misleadingly look like a real answer. A second, "normalized" set of the
+    same percentiles is also included, computed against cdf rescaled so the
+    selected TWA range's own total is 100% (cdf / total_pct * 100) --
+    answers "given this TWA range, at what TWS do we reach p% of *its*
+    wind time", always reachable by construction (unlike the absolute
+    rows). This is a display-only renormalization local to this table; it
+    does not change build_wind_speed_probability_figure's chart, which
+    stays deliberately absolute/non-renormalized (see its docstring).
 
     Returns a display-ready DataFrame (["Statistic", "Value"], one row per
     stat, pre-formatted strings) for st.dataframe -- not meant for further
@@ -392,6 +399,7 @@ def compute_wind_speed_stats(
     std_tws = np.sqrt(np.average((tws - mean_tws) ** 2, weights=pdf))
 
     total_pct = cdf[-1]
+    normalized_cdf = cdf / total_pct * 100  # rescales so this selection's own total is 100%
     rows = [
         ("Most probable TWS (mode)", f"{tws[mode_idx]:.2f} kts"),
         ("Peak probability", f"{pdf[mode_idx]:.2f} %"),
@@ -406,5 +414,8 @@ def compute_wind_speed_stats(
             continue
         idx = np.searchsorted(cdf, p)
         rows.append((f"TWS at {p:g}% cumulative probability", f"{tws[idx]:.2f} kts"))
+    for p in percentiles:
+        idx = min(np.searchsorted(normalized_cdf, p), len(tws) - 1)  # float rounding guard at p=100
+        rows.append((f"TWS at {p:g}% cumulative probability (normalized to selection)", f"{tws[idx]:.2f} kts"))
 
     return pd.DataFrame(rows, columns=["Statistic", "Value"])
