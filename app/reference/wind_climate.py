@@ -9,6 +9,7 @@ from app.reference.plotting import (
     build_wind_probability_figure,
     build_wind_rose_figure,
     build_wind_speed_probability_figure,
+    compute_wind_speed_stats,
     twa_range_coverage_pct,
 )
 
@@ -80,6 +81,11 @@ with tab_speed:
         width="stretch",
     )
     st.caption(f"Selected TWA range covers {twa_range_coverage_pct(twa_range_speed):.1f}% of total wind time.")
+
+    st.dataframe(
+        compute_wind_speed_stats(height_m=height_m, alpha=alpha, twa_range=twa_range_speed),
+        hide_index=True, width="stretch",
+    )
 
 with tab_3d:
     st.caption("Full 5°×1kt resolution, ungrouped.")

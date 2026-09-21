@@ -15,9 +15,11 @@ from app.reference.plotting import (
     _twa_range_label,
     build_wind_rose_figure,
     build_wind_speed_probability_figure,
+    compute_wind_speed_stats,
     make_3d_bars,
     power_law_scale_factor,
     twa_range_coverage_pct,
+    wind_speed_pdf_cdf,
 )
 
 
@@ -198,6 +200,80 @@ def test_build_wind_speed_probability_figure_twa_range_caps_below_full_total():
     cdf = _trace_values(fig.data[1].y)
     assert cdf[-1] == pytest.approx(twa_range_coverage_pct(twa_range), abs=1e-3)
     assert cdf[-1] < 100.0  # not renormalized -- a real slice of a smaller total
+
+
+def test_wind_speed_pdf_cdf_matches_figure_traces():
+    tws, pdf, cdf = wind_speed_pdf_cdf(height_m=20.0, alpha=1 / 7, twa_range=(30, 60))
+    fig = build_wind_speed_probability_figure(height_m=20.0, alpha=1 / 7, twa_range=(30, 60))
+    np.testing.assert_allclose(tws, _trace_values(fig.data[0].x))
+    np.testing.assert_allclose(pdf, _trace_values(fig.data[0].y))
+    np.testing.assert_allclose(cdf, _trace_values(fig.data[1].y))
+
+
+def test_compute_wind_speed_stats_mode_and_peak_probability():
+    stats = compute_wind_speed_stats()
+    row = stats.set_index("Statistic")
+    tws, pdf, _ = wind_speed_pdf_cdf()
+    mode_idx = np.argmax(pdf)
+    assert row.loc["Most probable TWS (mode)", "Value"] == f"{tws[mode_idx]:.2f} kts"
+    assert row.loc["Peak probability", "Value"] == f"{pdf[mode_idx]:.2f} %"
+
+
+def test_compute_wind_speed_stats_half_max_range_brackets_the_mode():
+    stats = compute_wind_speed_stats()
+    row = stats.set_index("Statistic")
+    tws, pdf, _ = wind_speed_pdf_cdf()
+    mode_tws = tws[np.argmax(pdf)]
+    lo_str, hi_str = row.loc["TWS range at ≥50% of peak probability", "Value"].replace(" kts", "").split(" – ")
+    assert float(lo_str) <= mode_tws <= float(hi_str)
+
+
+def test_compute_wind_speed_stats_percentiles_are_nondecreasing():
+    stats = compute_wind_speed_stats()
+    row = stats.set_index("Statistic")
+    values = [
+        float(row.loc[f"TWS at {p}% cumulative probability", "Value"].replace(" kts", ""))
+        for p in (10, 25, 50, 75, 90)
+    ]
+    assert values == sorted(values)
+
+
+def test_compute_wind_speed_stats_unreached_percentile_reports_coverage_not_a_bogus_value():
+    # a narrow TWA slice whose CDF caps well below 90% must not silently report the
+    # last TWS bin as if it were a real 90th-percentile answer
+    stats = compute_wind_speed_stats(twa_range=(30, 60))
+    row = stats.set_index("Statistic")
+    total_pct = twa_range_coverage_pct((30, 60))
+    assert total_pct < 90
+    value = row.loc["TWS at 90% cumulative probability", "Value"]
+    assert "not reached" in value
+    assert f"{total_pct:.1f}%" in value
+
+
+def test_compute_wind_speed_stats_responds_to_twa_range():
+    full = compute_wind_speed_stats()
+    narrow = compute_wind_speed_stats(twa_range=(30, 60))
+    full_row = full.set_index("Statistic")
+    narrow_row = narrow.set_index("Statistic")
+    assert full_row.loc["Mean TWS", "Value"] != narrow_row.loc["Mean TWS", "Value"]
+
+
+def test_compute_wind_speed_stats_total_coverage_matches_twa_range_coverage_pct():
+    twa_range = (30, 60)
+    stats = compute_wind_speed_stats(twa_range=twa_range)
+    row = stats.set_index("Statistic")
+    reported = float(row.loc["Total coverage (cumulative probability)", "Value"].replace(" %", ""))
+    assert reported == pytest.approx(twa_range_coverage_pct(twa_range), abs=0.05)
+
+
+def test_compute_wind_speed_stats_empty_selection_returns_empty_frame():
+    # (1, 2) falls strictly between two 5deg-spaced bin centers -- no TWA bin lands
+    # inside it, so the selection is genuinely empty and must not crash
+    tws, pdf, _ = wind_speed_pdf_cdf(twa_range=(1, 2))
+    assert pdf.sum() == 0  # sanity-check the fixture is actually empty
+    stats = compute_wind_speed_stats(twa_range=(1, 2))
+    assert stats.empty
+    assert list(stats.columns) == ["Statistic", "Value"]
 
 
 def test_build_wind_speed_probability_figure_scales_x_axis_only():

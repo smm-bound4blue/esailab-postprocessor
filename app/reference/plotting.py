@@ -277,6 +277,25 @@ def power_law_scale_factor(height_m: float, alpha: float, reference_height_m: fl
     return (height_m / reference_height_m) ** alpha
 
 
+def wind_speed_pdf_cdf(
+    height_m: float = REFERENCE_HEIGHT_M, alpha: float = 1 / 7, twa_range: Optional[Tuple[float, float]] = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    The (TWS centers, PDF %, CDF %) arrays underlying the Wind Speed
+    Probability chart -- shared by build_wind_speed_probability_figure and
+    compute_wind_speed_stats so both always describe the exact same
+    distribution (same height/alpha extrapolation, same twa_range filter,
+    same non-renormalized CDF -- see build_wind_speed_probability_figure's
+    docstring for why it isn't renormalized).
+    """
+    matrix = _filter_by_twa_range(load_wind_probability_matrix(), twa_range)
+    scale = power_law_scale_factor(height_m, alpha)
+    tws_centers = matrix.columns.to_numpy(dtype=float) * scale
+    pdf_pct = matrix.to_numpy().sum(axis=0) * 100  # sum over TWA rows, fraction -> percent
+    cdf_pct = np.cumsum(pdf_pct)
+    return tws_centers, pdf_pct, cdf_pct
+
+
 @st.cache_data
 def build_wind_speed_probability_figure(
     height_m: float = REFERENCE_HEIGHT_M, alpha: float = 1 / 7, twa_range: Optional[Tuple[float, float]] = None
@@ -300,11 +319,7 @@ def build_wind_speed_probability_figure(
     so the capped-below-100% CDF isn't mistaken for a bug). Consistent with
     the wind rose and 3D chart, which are also absolute, not conditional.
     """
-    matrix = _filter_by_twa_range(load_wind_probability_matrix(), twa_range)
-    scale = power_law_scale_factor(height_m, alpha)
-    tws_centers = matrix.columns.to_numpy(dtype=float) * scale
-    pdf_pct = matrix.to_numpy().sum(axis=0) * 100  # sum over TWA rows, fraction -> percent
-    cdf_pct = np.cumsum(pdf_pct)
+    tws_centers, pdf_pct, cdf_pct = wind_speed_pdf_cdf(height_m, alpha, twa_range)
 
     fig = go.Figure()
     fig.add_trace(
@@ -336,3 +351,60 @@ def build_wind_speed_probability_figure(
         margin=dict(l=0, r=0, t=100, b=0),
     )
     return fig
+
+
+def compute_wind_speed_stats(
+    height_m: float = REFERENCE_HEIGHT_M,
+    alpha: float = 1 / 7,
+    twa_range: Optional[Tuple[float, float]] = None,
+    percentiles: Sequence[float] = (10, 25, 50, 75, 90),
+) -> pd.DataFrame:
+    """
+    Summary statistics for the exact same (TWS, PDF, CDF) distribution
+    build_wind_speed_probability_figure plots (same wind_speed_pdf_cdf call
+    -- same height/alpha extrapolation, same twa_range filter) -- mode
+    (peak probability + its TWS), the TWS range at >=50% of peak
+    probability, mean/std. deviation of TWS, total coverage (the CDF's
+    final value -- same number twa_range_coverage_pct reports), and TWS at
+    each requested cumulative percentile. All computed on the discrete TWS
+    bin grid the wind probability matrix already provides, no interpolation
+    between bins -- consistent with how the chart itself is built.
+
+    A requested percentile beyond what twa_range actually covers (its CDF
+    caps below 100% when twa_range is set -- see
+    build_wind_speed_probability_figure's docstring) reports "not reached"
+    rather than silently returning the last TWS bin, which would otherwise
+    misleadingly look like a real answer.
+
+    Returns a display-ready DataFrame (["Statistic", "Value"], one row per
+    stat, pre-formatted strings) for st.dataframe -- not meant for further
+    numeric computation.
+    """
+    tws, pdf, cdf = wind_speed_pdf_cdf(height_m, alpha, twa_range)
+    if pdf.sum() <= 0:
+        return pd.DataFrame(columns=["Statistic", "Value"])
+
+    mode_idx = np.argmax(pdf)
+    half_max = pdf.max() / 2
+    above_half = np.flatnonzero(pdf >= half_max)
+
+    mean_tws = np.average(tws, weights=pdf)
+    std_tws = np.sqrt(np.average((tws - mean_tws) ** 2, weights=pdf))
+
+    total_pct = cdf[-1]
+    rows = [
+        ("Most probable TWS (mode)", f"{tws[mode_idx]:.2f} kts"),
+        ("Peak probability", f"{pdf[mode_idx]:.2f} %"),
+        ("TWS range at ≥50% of peak probability", f"{tws[above_half[0]]:.2f} – {tws[above_half[-1]]:.2f} kts"),
+        ("Mean TWS", f"{mean_tws:.2f} kts"),
+        ("Std. deviation of TWS", f"{std_tws:.2f} kts"),
+        ("Total coverage (cumulative probability)", f"{total_pct:.1f} %"),
+    ]
+    for p in percentiles:
+        if p > total_pct:
+            rows.append((f"TWS at {p:g}% cumulative probability", f"not reached (total coverage {total_pct:.1f}%)"))
+            continue
+        idx = np.searchsorted(cdf, p)
+        rows.append((f"TWS at {p:g}% cumulative probability", f"{tws[idx]:.2f} kts"))
+
+    return pd.DataFrame(rows, columns=["Statistic", "Value"])
