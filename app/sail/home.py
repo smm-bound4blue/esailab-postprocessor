@@ -19,7 +19,7 @@ st.title("Sail")
 st.caption("Sail rotated through an AoA sweep at fixed TWS/RPM, no harbour geometry.")
 
 try:
-    data_root = get_project_path_for_type("")
+    data_root = get_project_path_for_type("01_SAIL")
     # data_root = get_project_path_for_type(SIMULATION_TYPE)
 except ValueError as e:
     st.error(f"{e}. Set CFD_PROJECT_PATH in .env and restart.")
